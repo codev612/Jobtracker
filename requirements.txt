@@ -1,0 +1,9 @@
+# Job Tracker - Python dependencies
+# Core app runs on Python stdlib only (sqlite3, argparse)
+
+# Optional: for a nicer table display in the CLI
+tabulate==0.9.0
+
+# Windows GUI
+customtkinter==5.2.2
+tkcalendar==1.6.1
