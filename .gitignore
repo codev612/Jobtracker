@@ -6,6 +6,9 @@ env/
 # Database
 *.db
 
+# Config (contains API key)
+config.json
+
 # Python
 __pycache__/
 *.py[cod]

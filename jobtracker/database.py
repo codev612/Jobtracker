@@ -33,6 +33,7 @@ def init_db() -> None:
             url TEXT,
             description TEXT,
             notes TEXT,
+            tailored_resume TEXT,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         )
@@ -41,6 +42,12 @@ def init_db() -> None:
     # Add description column for existing databases
     try:
         conn.execute("ALTER TABLE jobs ADD COLUMN description TEXT")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+    # Add tailored_resume column for existing databases
+    try:
+        conn.execute("ALTER TABLE jobs ADD COLUMN tailored_resume TEXT")
         conn.commit()
     except sqlite3.OperationalError:
         pass  # Column already exists
@@ -80,10 +87,11 @@ def get_all_jobs(
     status_filter: Optional[str] = None,
     company: Optional[str] = None,
     position: Optional[str] = None,
+    description: Optional[str] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
 ) -> list[dict]:
-    """Get all jobs, optionally filtered by status, company, position, and date range."""
+    """Get all jobs, optionally filtered by status, company, position, description, and date range."""
     conn = get_connection()
     conditions = []
     values = []
@@ -96,6 +104,9 @@ def get_all_jobs(
     if position and position.strip():
         conditions.append("position LIKE ?")
         values.append(f"%{position.strip()}%")
+    if description and description.strip():
+        conditions.append("description LIKE ?")
+        values.append(f"%{description.strip()}%")
     if date_from and date_from.strip():
         conditions.append("applied_date >= ?")
         values.append(date_from.strip())
@@ -130,6 +141,7 @@ def update_job(
     url: Optional[str] = None,
     description: Optional[str] = None,
     notes: Optional[str] = None,
+    tailored_resume: Optional[str] = None,
 ) -> bool:
     """Update a job. Returns True if updated, False if not found."""
     job = get_job(job_id)
@@ -165,6 +177,9 @@ def update_job(
     if notes is not None:
         updates.append("notes = ?")
         values.append(notes)
+    if tailored_resume is not None:
+        updates.append("tailored_resume = ?")
+        values.append(tailored_resume)
 
     if not updates:
         return True
@@ -194,7 +209,7 @@ def delete_job(job_id: int) -> bool:
 
 
 def search_jobs(query: str) -> list[dict]:
-    """Search jobs by company or position."""
+    """Search jobs by company, position, notes, or description."""
     conn = get_connection()
     pattern = f"%{query}%"
     rows = conn.execute(

@@ -1,14 +1,16 @@
 """Windows desktop GUI for the job tracker."""
 
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, filedialog
 from datetime import datetime, date
 from typing import Optional
+import threading
 
 import customtkinter as ctk
 from tkcalendar import DateEntry, Calendar
 
 from . import database
+from . import resume_builder
 
 
 def _show_date_picker(parent, entry: ctk.CTkEntry, position_widget=None, on_select=None) -> None:
@@ -136,6 +138,7 @@ class JobFormDialog(ctk.CTkToplevel):
         # Buttons (fixed at bottom)
         btn_frame = ctk.CTkFrame(self, fg_color="transparent")
         btn_frame.pack(fill="x", padx=20, pady=(0, 20))
+        ctk.CTkButton(btn_frame, text="Generate & Export to Word", command=self._generate_and_export_resume, width=180).pack(side="left", padx=(0, 10))
         ctk.CTkButton(btn_frame, text="Save", command=self._on_save, width=100).pack(side="left", padx=(0, 10))
         ctk.CTkButton(btn_frame, text="Cancel", command=self._on_cancel, width=100, fg_color="gray").pack(side="left")
 
@@ -189,6 +192,69 @@ class JobFormDialog(ctk.CTkToplevel):
         self.grab_release()
         self.destroy()
 
+    def _generate_and_export_resume(self):
+        """Generate tailored resume from form data and export as Word."""
+        company = self.company_var.get().strip()
+        position = self.position_var.get().strip()
+        description = self.description_text.get("1.0", "end").strip() or None
+        if not company or not position:
+            messagebox.showerror("Validation", "Company and Position are required.")
+            return
+        if not description:
+            messagebox.showwarning("Job Description", "Add the job description for better tailoring.")
+
+        progress = ctk.CTkToplevel(self)
+        progress.title("Generating Resume...")
+        progress.geometry("320x80")
+        progress.transient(self)
+        progress.grab_set()
+        ctk.CTkLabel(progress, text="Generating tailored resume...").pack(pady=20, padx=20)
+        progress.update()
+
+        result_holder = []
+
+        def do_build():
+            text, err = resume_builder.build_tailored_resume(
+                job_company=company,
+                job_position=position,
+                job_description=description,
+                base_resume=resume_builder.get_base_resume(),
+            )
+            result_holder.append((text, err))
+            self.after(0, lambda: _finish(progress, result_holder))
+
+        def _finish(win, holder):
+            try:
+                win.grab_release()
+                win.destroy()
+            except Exception:
+                pass
+            if not holder:
+                return
+            text, err = holder[0]
+            if err:
+                messagebox.showerror("Resume Builder", err)
+                return
+            if not text:
+                messagebox.showwarning("Resume Builder", "No content generated.")
+                return
+            # Save as .docx
+            default_name = f"Resume_{company}_{position}".replace(" ", "_").replace("/", "-")[:50] + ".docx"
+            path = filedialog.asksaveasfilename(
+                title="Export Resume",
+                defaultextension=".docx",
+                filetypes=[("Word Document", "*.docx"), ("All", "*.*")],
+                initialfile=default_name,
+            )
+            if path:
+                ok, export_err = resume_builder.export_to_docx(text, path)
+                if ok:
+                    messagebox.showinfo("Exported", f"Resume saved to:\n{path}")
+                else:
+                    messagebox.showerror("Export Failed", export_err or "Could not save file.")
+
+        threading.Thread(target=do_build, daemon=True).start()
+
 
 class JobDetailDialog(ctk.CTkToplevel):
     """Dialog showing full job details."""
@@ -200,7 +266,7 @@ class JobDetailDialog(ctk.CTkToplevel):
         self.on_edit = on_edit
         self.on_delete = on_delete
 
-        self.geometry("450x500")
+        self.geometry("500x600")
         self._build_ui()
 
     def _build_ui(self):
@@ -210,6 +276,25 @@ class JobDetailDialog(ctk.CTkToplevel):
         inner = ctk.CTkFrame(scroll, fg_color="transparent")
         inner.pack(fill="both", expand=True)
 
+        COPY_ICON = "\U0001F4CB"  # 📋 clipboard icon
+
+        def _section(title: str = None, copy_command=None):
+            """Create a section frame with border. If copy_command given, add icon button at top."""
+            frame = ctk.CTkFrame(inner, fg_color="transparent", corner_radius=4, border_width=1, border_color="#444")
+            frame.pack(fill="x", pady=(0, 12))
+            if title or copy_command:
+                header = ctk.CTkFrame(frame, fg_color="transparent")
+                header.pack(fill="x", padx=10, pady=(10, 6))
+                if title:
+                    ctk.CTkLabel(header, text=title, font=("", 12, "bold")).pack(side="left")
+                if copy_command:
+                    ctk.CTkButton(
+                        header, text=COPY_ICON, command=copy_command, width=32, fg_color="transparent"
+                    ).pack(side="right", padx=(8, 0))
+            return frame
+
+        # Basic info section
+        info_section = _section("Job Details")
         fields = [
             ("Company", self.job.get("company")),
             ("Position", self.job.get("position")),
@@ -221,25 +306,45 @@ class JobDetailDialog(ctk.CTkToplevel):
         ]
         for label, value in fields:
             if value:
-                ctk.CTkLabel(inner, text=f"{label}:", font=("", 12, "bold")).pack(anchor="w", pady=(8, 2))
-                ctk.CTkLabel(inner, text=str(value), anchor="w", justify="left").pack(anchor="w", padx=(0, 0), pady=(0, 4))
-                if label == "URL" and value.startswith("http"):
-                    pass
+                row = ctk.CTkFrame(info_section, fg_color="transparent")
+                row.pack(anchor="w", padx=10, pady=(8, 2))
+                if label == "URL":
+                    ctk.CTkButton(
+                        row, text=COPY_ICON, command=self._copy_url, width=32, fg_color="transparent"
+                    ).pack(side="left", padx=(0, 6))
+                ctk.CTkLabel(row, text=f"{label}:", font=("", 12, "bold")).pack(side="left", padx=(0, 6))
+                ctk.CTkLabel(row, text=str(value), anchor="w", justify="left").pack(side="left", fill="x", expand=True)
+        ctk.CTkFrame(info_section, height=4, fg_color="transparent").pack(anchor="w")
 
+        # Job Description section
         description = self.job.get("description")
         if description:
-            ctk.CTkLabel(inner, text="Job Description:", font=("", 12, "bold")).pack(anchor="w", pady=(8, 2))
-            desc_lbl = ctk.CTkLabel(inner, text=description, anchor="w", justify="left", wraplength=380)
-            desc_lbl.pack(anchor="w", pady=(0, 4))
+            desc_section = _section("Job Description", copy_command=self._copy_description)
+            desc_lbl = ctk.CTkLabel(desc_section, text=description, anchor="w", justify="left", wraplength=400)
+            desc_lbl.pack(anchor="w", padx=10, pady=(0, 10))
 
+        # Notes section
         notes = self.job.get("notes")
         if notes:
-            ctk.CTkLabel(inner, text="Notes:", font=("", 12, "bold")).pack(anchor="w", pady=(8, 2))
-            notes_lbl = ctk.CTkLabel(inner, text=notes, anchor="w", justify="left", wraplength=380)
-            notes_lbl.pack(anchor="w", pady=(0, 4))
+            notes_section = _section("Notes")
+            notes_lbl = ctk.CTkLabel(notes_section, text=notes, anchor="w", justify="left", wraplength=400)
+            notes_lbl.pack(anchor="w", padx=10, pady=(0, 10))
+
+        # Tailored Resume section
+        resume_section = _section("Tailored Resume", copy_command=self._copy_resume)
+        self.resume_textbox = ctk.CTkTextbox(resume_section, height=200, width=400)
+        self.resume_textbox.pack(anchor="w", padx=10, pady=(0, 8))
+        tailored_resume = self.job.get("tailored_resume")
+        if tailored_resume:
+            self.resume_textbox.insert("1.0", tailored_resume)
+        self.resume_textbox.configure(state="disabled")
+        resume_btn_row = ctk.CTkFrame(resume_section, fg_color="transparent")
+        resume_btn_row.pack(anchor="w", padx=10, pady=(0, 10))
+        ctk.CTkButton(resume_btn_row, text="Export to Word", command=self._export_resume, width=120).pack(side="left")
 
         btn_frame = ctk.CTkFrame(self, fg_color="transparent")
         btn_frame.pack(fill="x", padx=24, pady=(0, 20))
+        ctk.CTkButton(btn_frame, text="Build Tailored Resume", command=self._build_resume, width=140).pack(side="left", padx=(0, 10))
         if self.on_edit:
             ctk.CTkButton(btn_frame, text="Edit", command=self._edit, width=80).pack(side="left", padx=(0, 10))
         if self.on_delete:
@@ -263,6 +368,93 @@ class JobDetailDialog(ctk.CTkToplevel):
             if self.on_delete:
                 self.on_delete(self.job["id"])
             self.destroy()
+
+    def _build_resume(self):
+        """Build tailored resume for this job using OpenAI."""
+        progress = ctk.CTkToplevel(self)
+        progress.title("Building Resume...")
+        progress.geometry("300x80")
+        progress.transient(self)
+        progress.grab_set()
+        ctk.CTkLabel(progress, text="Generating tailored resume...").pack(pady=20, padx=20)
+        progress.update()
+
+        result_holder = []
+
+        def do_build():
+            text, err = resume_builder.build_tailored_resume(
+                job_company=self.job.get("company", ""),
+                job_position=self.job.get("position", ""),
+                job_description=self.job.get("description"),
+                base_resume=resume_builder.get_base_resume(),
+            )
+            result_holder.append((text, err))
+            self.after(0, lambda: _finish(progress, result_holder))
+
+        def _finish(win, holder):
+            try:
+                win.grab_release()
+                win.destroy()
+            except Exception:
+                pass
+            if holder:
+                text, err = holder[0]
+                if err:
+                    messagebox.showerror("Resume Builder", err)
+                elif text:
+                    self._save_resume_and_refresh(text)
+                else:
+                    messagebox.showwarning("Resume Builder", "No content generated.")
+
+        threading.Thread(target=do_build, daemon=True).start()
+
+    def _save_resume_and_refresh(self, text: str):
+        """Save tailored resume text to job and refresh display."""
+        job_id = self.job.get("id")
+        if job_id:
+            database.update_job(job_id, tailored_resume=text)
+        self.job["tailored_resume"] = text
+        self.resume_textbox.configure(state="normal")
+        self.resume_textbox.delete("1.0", "end")
+        self.resume_textbox.insert("1.0", text)
+        self.resume_textbox.configure(state="disabled")
+
+    def _copy_url(self):
+        url = self.job.get("url")
+        if url:
+            self.clipboard_clear()
+            self.clipboard_append(url)
+
+    def _copy_description(self):
+        description = self.job.get("description")
+        if description:
+            self.clipboard_clear()
+            self.clipboard_append(description)
+
+    def _copy_resume(self):
+        text = self.job.get("tailored_resume")
+        if text:
+            self.clipboard_clear()
+            self.clipboard_append(text)
+
+    def _export_resume(self):
+        text = self.job.get("tailored_resume")
+        if not text:
+            messagebox.showinfo("Resume", "No tailored resume to export.")
+            return
+        default_name = f"Resume_{self.job.get('company', 'Job')}_{self.job.get('position', 'Application')}".replace(" ", "_").replace("/", "-")[:50] + ".docx"
+        path = filedialog.asksaveasfilename(
+            title="Export Resume",
+            defaultextension=".docx",
+            filetypes=[("Word Document", "*.docx"), ("All", "*.*")],
+            initialfile=default_name,
+        )
+        if path:
+            ok, err = resume_builder.export_to_docx(text, path)
+            if ok:
+                messagebox.showinfo("Exported", f"Resume saved to:\n{path}")
+            else:
+                messagebox.showerror("Export Failed", err or "Could not save file.")
 
 
 class JobTrackerApp(ctk.CTk):
@@ -332,6 +524,10 @@ class JobTrackerApp(ctk.CTk):
         self.filter_position = ctk.CTkEntry(filter_frame, width=120, placeholder_text="Filter...")
         self.filter_position.pack(side="left", padx=(0, 15))
         self.filter_position.bind("<KeyRelease>", lambda e: self._on_filter())
+        ctk.CTkLabel(filter_frame, text="Description:").pack(side="left", padx=(0, 5))
+        self.filter_description = ctk.CTkEntry(filter_frame, width=120, placeholder_text="Filter...")
+        self.filter_description.pack(side="left", padx=(0, 15))
+        self.filter_description.bind("<KeyRelease>", lambda e: self._on_filter())
         ctk.CTkLabel(filter_frame, text="Status:").pack(side="left", padx=(0, 5))
         self.filter_status = ctk.CTkComboBox(
             filter_frame,
@@ -411,7 +607,9 @@ class JobTrackerApp(ctk.CTk):
 
     def _build_settings_tab(self):
         settings_tab = self.tabview.tab("Settings")
-        inner = ctk.CTkFrame(settings_tab, fg_color="transparent")
+        scroll = ctk.CTkScrollableFrame(settings_tab, fg_color="transparent")
+        scroll.pack(fill="both", expand=True)
+        inner = ctk.CTkFrame(scroll, fg_color="transparent")
         inner.pack(fill="both", expand=True)
 
         ctk.CTkLabel(inner, text="Settings", font=("", 22, "bold")).pack(anchor="w", pady=(0, 20))
@@ -431,10 +629,48 @@ class JobTrackerApp(ctk.CTk):
         self.theme_combo.set("Dark" if current == "Dark" else "Light" if current == "Light" else "System")
         self.theme_combo.pack(side="left")
 
+        # OpenAI / Resume builder
+        ctk.CTkLabel(inner, text="Resume Builder (OpenAI)", font=("", 14, "bold")).pack(anchor="w", pady=(20, 5))
+        ctk.CTkLabel(inner, text="API Key:", font=("", 11)).pack(anchor="w", pady=(5, 2))
+        self.api_key_entry = ctk.CTkEntry(inner, width=400, placeholder_text="sk-...", show="*")
+        self.api_key_entry.pack(anchor="w", pady=(0, 5))
+        if resume_builder.get_api_key():
+            self.api_key_entry.insert(0, resume_builder.get_api_key())
+        ctk.CTkLabel(inner, text="Base Resume (your resume text to tailor):", font=("", 11)).pack(anchor="w", pady=(10, 2))
+        resume_btn_frame = ctk.CTkFrame(inner, fg_color="transparent")
+        resume_btn_frame.pack(anchor="w", pady=(0, 5))
+        ctk.CTkButton(resume_btn_frame, text="Upload .docx / .pdf", command=self._upload_resume, width=140).pack(side="left", padx=(0, 10))
+        ctk.CTkButton(resume_btn_frame, text="Save", command=self._save_resume_settings, width=80).pack(side="left")
+        self.base_resume_text = ctk.CTkTextbox(inner, height=120, width=500)
+        self.base_resume_text.pack(anchor="w", pady=(0, 5))
+        if resume_builder.get_base_resume():
+            self.base_resume_text.insert("1.0", resume_builder.get_base_resume())
+
         # Database info
         ctk.CTkLabel(inner, text="Data", font=("", 14, "bold")).pack(anchor="w", pady=(20, 5))
         db_path = str(database.DATABASE_PATH)
         ctk.CTkLabel(inner, text=f"Database: {db_path}", font=("", 11), anchor="w").pack(anchor="w")
+
+    def _upload_resume(self):
+        path = filedialog.askopenfilename(
+            title="Select Resume",
+            filetypes=[("Resume files", "*.pdf *.docx"), ("PDF", "*.pdf"), ("Word", "*.docx"), ("All", "*.*")],
+        )
+        if path:
+            text, err = resume_builder.extract_text_from_file(path)
+            if err:
+                messagebox.showerror("Upload Failed", err)
+            elif text:
+                self.base_resume_text.delete("1.0", "end")
+                self.base_resume_text.insert("1.0", text)
+                messagebox.showinfo("Uploaded", "Resume text extracted. Click Save to keep it.")
+            else:
+                messagebox.showwarning("Upload", "No text found in file.")
+
+    def _save_resume_settings(self):
+        resume_builder.save_api_key(self.api_key_entry.get().strip())
+        resume_builder.save_base_resume(self.base_resume_text.get("1.0", "end").strip())
+        messagebox.showinfo("Saved", "Resume builder settings saved.")
 
     def _on_theme_change(self, value: str):
         mode = value.lower()
@@ -446,6 +682,7 @@ class JobTrackerApp(ctk.CTk):
             "status_filter": None if status == "all" else status,
             "company": self.filter_company.get() or None,
             "position": self.filter_position.get() or None,
+            "description": self.filter_description.get() or None,
             "date_from": self.filter_date_from.get() or None,
             "date_to": self.filter_date_to.get() or None,
         }
@@ -453,6 +690,7 @@ class JobTrackerApp(ctk.CTk):
     def _clear_filters(self):
         self.filter_company.delete(0, "end")
         self.filter_position.delete(0, "end")
+        self.filter_description.delete(0, "end")
         self.filter_status.set("all")
         self.filter_date_from.delete(0, "end")
         self.filter_date_to.delete(0, "end")
@@ -481,14 +719,15 @@ class JobTrackerApp(ctk.CTk):
                     j.get("location") or "",
                 ),
             )
-            self._update_stats()
+        self._update_stats(len(jobs))
         self._on_selection_change()
 
-    def _update_stats(self):
+    def _update_stats(self, filtered_count: int = 0):
         stats = database.get_stats()
         total = sum(stats.values())
         parts = [f"{s}: {c}" for s, c in stats.items()]
-        self.stats_label.configure(text=f"Total: {total}  |  " + "  |  ".join(parts))
+        filtered_text = f"{filtered_count} job{'s' if filtered_count != 1 else ''}  |  "
+        self.stats_label.configure(text=filtered_text + f"Total: {total}  |  " + "  |  ".join(parts))
 
     def _get_selected_id(self) -> Optional[int]:
         sel = self.tree.selection()

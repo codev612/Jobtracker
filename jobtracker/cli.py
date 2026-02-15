@@ -64,6 +64,7 @@ def cmd_list(args: argparse.Namespace) -> None:
         status_filter=args.status if args.status != "all" else None,
         company=getattr(args, "company", None),
         position=getattr(args, "position", None),
+        description=getattr(args, "description", None),
         date_from=getattr(args, "date_from", None),
         date_to=getattr(args, "date_to", None),
     )
@@ -186,6 +187,7 @@ def main() -> None:
     list_parser.add_argument("-s", "--status", choices=["all"] + database.STATUSES, default="all", help="Filter by status")
     list_parser.add_argument("-c", "--company", help="Filter by company (partial match)")
     list_parser.add_argument("-p", "--position", help="Filter by position (partial match)")
+    list_parser.add_argument("--description", help="Filter by description (partial match)")
     list_parser.add_argument("--date-from", help="Filter from date (YYYY-MM-DD)")
     list_parser.add_argument("--date-to", help="Filter to date (YYYY-MM-DD)")
     list_parser.set_defaults(func=cmd_list)
@@ -216,7 +218,7 @@ def main() -> None:
 
     # search
     search_parser = subparsers.add_parser("search", help="Search jobs")
-    search_parser.add_argument("query", help="Search term (company, position, notes)")
+    search_parser.add_argument("query", help="Search term (company, position, notes, description)")
     search_parser.set_defaults(func=cmd_search)
 
     # stats
