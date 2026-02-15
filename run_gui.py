@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Launch the Job Tracker Windows app."""
+"""Entry point for the Job Tracker GUI (used when building executable)."""
 
 from jobtracker.gui import run_gui
 

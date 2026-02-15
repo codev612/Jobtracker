@@ -1,0 +1,2 @@
+# Build requirements for creating Windows executable
+pyinstaller>=6.0.0

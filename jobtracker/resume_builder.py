@@ -39,7 +39,9 @@ def extract_text_from_file(filepath: str) -> Tuple[str, Optional[str]]:
     else:
         return "", "Unsupported format. Use .pdf or .docx"
 
-CONFIG_PATH = Path(__file__).parent.parent / "config.json"
+from .paths import BASE_PATH
+
+CONFIG_PATH = BASE_PATH / "config.json"
 
 
 def _load_config() -> dict:

@@ -5,10 +5,12 @@ from pathlib import Path
 from datetime import datetime
 from typing import Optional
 
+from .paths import BASE_PATH
+
 # Default status options for job applications
 STATUSES = ["wishlist", "applying", "applied", "interviewing", "offer", "rejected", "accepted"]
 
-DATABASE_PATH = Path(__file__).parent.parent / "jobs.db"
+DATABASE_PATH = BASE_PATH / "jobs.db"
 
 
 def get_connection() -> sqlite3.Connection:
