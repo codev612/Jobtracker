@@ -66,11 +66,31 @@ def _save_config(config: dict) -> None:
         pass
 
 
+_KEYRING_SERVICE = "JobTracker"
+_KEYRING_USER = "openai_api_key"
+
+
 def get_api_key() -> Optional[str]:
-    """Get OpenAI API key from config or environment."""
+    """Get OpenAI API key from keyring, config (legacy), or environment."""
+    try:
+        import keyring
+        key = keyring.get_password(_KEYRING_SERVICE, _KEYRING_USER)
+        if key and key.strip():
+            return key.strip()
+    except Exception:
+        pass
+    # Fallback: legacy config
     config = _load_config()
     key = config.get("openai_api_key", "").strip()
     if key:
+        # Migrate to keyring and remove from config
+        try:
+            import keyring
+            keyring.set_password(_KEYRING_SERVICE, _KEYRING_USER, key)
+            config.pop("openai_api_key", None)
+            _save_config(config)
+        except Exception:
+            pass
         return key
     return os.environ.get("OPENAI_API_KEY", "").strip() or None
 
@@ -81,16 +101,51 @@ def get_base_resume() -> str:
 
 
 def save_api_key(key: str) -> None:
-    """Save OpenAI API key to config."""
+    """Save OpenAI API key to keyring (OS credential store)."""
+    import keyring
+    key = (key or "").strip()
+    if key:
+        keyring.set_password(_KEYRING_SERVICE, _KEYRING_USER, key)
+    else:
+        try:
+            keyring.delete_password(_KEYRING_SERVICE, _KEYRING_USER)
+        except Exception:
+            pass  # Password may not exist
+    # Remove from config if present (migrate away from plain text)
     config = _load_config()
-    config["openai_api_key"] = key
-    _save_config(config)
+    if "openai_api_key" in config:
+        config.pop("openai_api_key")
+        _save_config(config)
 
 
 def save_base_resume(resume: str) -> None:
     """Save base resume to config."""
     config = _load_config()
     config["base_resume"] = resume
+    _save_config(config)
+
+
+def get_model() -> str:
+    """Get OpenAI model from config. Defaults to gpt-4o-mini."""
+    return _load_config().get("openai_model", "gpt-4o-mini").strip() or "gpt-4o-mini"
+
+
+def get_theme() -> str:
+    """Get saved theme from config. Returns 'Dark', 'Light', or 'System'."""
+    return _load_config().get("appearance_mode", "Dark").strip() or "Dark"
+
+
+def save_theme(theme: str) -> None:
+    """Save theme to config."""
+    config = _load_config()
+    config["appearance_mode"] = (theme or "Dark").strip()
+    _save_config(config)
+
+
+def save_model(model: str) -> None:
+    """Save OpenAI model to config."""
+    config = _load_config()
+    config["openai_model"] = (model or "gpt-4o-mini").strip()
     _save_config(config)
 
 
@@ -180,6 +235,7 @@ def build_tailored_resume(
     job_description: Optional[str],
     base_resume: str,
     api_key: Optional[str] = None,
+    model: Optional[str] = None,
 ) -> tuple[str, Optional[str]]:
     """
     Use OpenAI to generate a tailored resume for the given job.
@@ -227,23 +283,36 @@ def build_tailored_resume(
         )
 
     client = OpenAI(api_key=key)
+    model_id = (model or get_model()).strip() or "gpt-4o-mini"
 
     try:
         response = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model=model_id,
             messages=[
                 {
                     "role": "system",
                     "content": "You are an expert resume writer. Tailor the given resume to match the job posting. "
-                    "Emphasize relevant skills, experiences, and keywords from the job description. "
+                    "CRITICAL - EXTRACT 100% OF TECH SKILLS: First exhaustively list every tech skill, technology, framework, tool, and keyword "
+                    "from the job description (languages, libraries, cloud, databases, methodologies, etc.). "
+                    "The tailored resume MUST include at least 90% of those extracted skills. "
+                    "Weave them into EXPERIENCE bullets, the SKILLS section, and PROJECTS. No omission of major job-required tech. "
+                    "Use ONLY job description vocabulary - NOT the base resume's original skill wording. "
+                    "If the base resume says 'Java' but the job wants 'Python', reframe using Python and other job-relevant tech. "
+                    "Every skill in the output must come from the job description. "
+                    "In the Skills section: include as many job-described skills as the candidate's experience can support - aim for 90%+ coverage. "
+                    "CRITICAL - KEEP EXPERIENCES FROM BASE RESUME: Use ONLY the jobs, companies, roles, dates, and industry from the base resume. "
+                    "Do NOT invent new employers, roles, or experiences. Reframe the candidate's existing experience with job-relevant skills - "
+                    "tailor the wording and skills, but keep experiences grounded in what the base resume actually shows. "
                     + section_instruction +
                     project_instruction +
                     "Do NOT use company or employer names as section headers - those go under experience entries. "
+                    "Name and contact at top: use normal capitalization (e.g. John Smith), NOT all caps. ATS rejects excessive capitalization in names. "
                     "Use this format:\n"
+                    "- Name in title case (e.g. John Smith), NOT JOHN SMITH\n"
                     "- Section headers in ALL CAPS matching the base resume exactly\n"
                     "- For each job: Company name on its own line, then Role | Date on next line\n"
                     "- Date format: 'Nov 2024 - Dec 2025' or 'Nov 2024 - Present' for current roles (use month abbrev + year)\n"
-                    "- Bullet points with • or - for achievements\n"
+                    "- Bullet points with • or - for achievements (include job-relevant skills in each bullet)\n"
                     "- Blank line between different jobs (career breaks)\n"
                     "Output only the tailored resume text, no explanations.",
                 },
@@ -254,9 +323,47 @@ def build_tailored_resume(
             ],
         )
         content = response.choices[0].message.content
+        if content:
+            content = _fix_name_capitalization(content.strip())
         return (content or "").strip(), None
     except Exception as e:
         return "", str(e)
+
+
+def _fix_name_capitalization(text: str) -> str:
+    """Convert excessively capitalized name/header lines to title case for ATS compatibility."""
+    lines = text.split("\n")
+    if not lines:
+        return text
+
+    def _has_excessive_caps(s: str) -> bool:
+        letters = [c for c in s if c.isalpha()]
+        return len(letters) >= 2 and sum(1 for c in letters if c.isupper()) > 2
+
+    # Find header block: first lines before section header or bullet (same logic as export)
+    section_names = {sn.lower() for sn in SECTION_NAMES}
+    bullet_chars = ("•", "-", "*", "·", "▪", "▸")
+    header_end = 0
+    for idx, line in enumerate(lines):
+        s = line.strip()
+        if not s:
+            header_end = idx + 1
+            continue
+        cleaned = s.strip().lstrip("#*_- ").rstrip(":").strip().lower()
+        base = cleaned.rstrip(":")
+        is_section = base in section_names
+        is_bullet = any(s.startswith(c) for c in bullet_chars)
+        if is_section or is_bullet:
+            header_end = idx
+            break
+        header_end = idx + 1
+
+    # Fix any header line with excessive caps (name, title, etc.); skip email lines
+    for i in range(min(header_end, len(lines))):
+        stripped = lines[i].strip()
+        if stripped and "@" not in stripped and _has_excessive_caps(stripped):
+            lines[i] = lines[i].replace(stripped, stripped.title(), 1)
+    return "\n".join(lines)
 
 
 def export_to_docx(text: str, filepath: str) -> Tuple[bool, Optional[str]]:
@@ -265,6 +372,7 @@ def export_to_docx(text: str, filepath: str) -> Tuple[bool, Optional[str]]:
     Detects section headers, bullet points, and applies appropriate styles.
     Name and contact info at the top are centered.
     """
+    text = _fix_name_capitalization(text)
     try:
         import re
         from docx import Document

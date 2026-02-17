@@ -12,6 +12,7 @@ a = Analysis(
         'customtkinter',
         'tkcalendar',
         'openai',
+        'keyring',
         'fitz',  # pymupdf
         'docx',
     ],

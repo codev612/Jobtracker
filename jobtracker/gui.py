@@ -1,5 +1,6 @@
 """Windows desktop GUI for the job tracker."""
 
+import os
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 from datetime import datetime, date
@@ -11,6 +12,38 @@ from tkcalendar import DateEntry, Calendar
 
 from . import database
 from . import resume_builder
+
+
+def _export_success_dialog(parent, path: str) -> None:
+    """Show export confirmation with Open Path and Open File buttons."""
+    dlg = ctk.CTkToplevel(parent)
+    dlg.title("Exported")
+    dlg.geometry("420x180")
+    dlg.transient(parent)
+    dlg.grab_set()
+
+    ctk.CTkLabel(dlg, text="Resume saved to:", font=("", 12, "bold")).pack(anchor="w", padx=20, pady=(20, 6))
+    path_lbl = ctk.CTkLabel(dlg, text=path, anchor="w", justify="left", wraplength=380)
+    path_lbl.pack(anchor="w", padx=20, pady=(0, 16))
+
+    btn_frame = ctk.CTkFrame(dlg, fg_color="transparent")
+    btn_frame.pack(fill="x", padx=20, pady=(0, 20))
+    ctk.CTkButton(btn_frame, text="Open Path", command=lambda: _open_path(path), width=100).pack(side="left", padx=(0, 10))
+    ctk.CTkButton(btn_frame, text="Open File", command=lambda: _open_file(path), width=100).pack(side="left", padx=(0, 10))
+    ctk.CTkButton(btn_frame, text="Close", command=dlg.destroy, width=80).pack(side="left")
+
+
+def _open_path(path: str) -> None:
+    """Open the folder containing the file in Explorer."""
+    dirpath = os.path.dirname(path)
+    if dirpath and os.path.exists(dirpath):
+        os.startfile(dirpath)
+
+
+def _open_file(path: str) -> None:
+    """Open the file with default application."""
+    if path and os.path.exists(path):
+        os.startfile(path)
 
 
 def _show_date_picker(parent, entry: ctk.CTkEntry, position_widget=None, on_select=None) -> None:
@@ -249,7 +282,7 @@ class JobFormDialog(ctk.CTkToplevel):
             if path:
                 ok, export_err = resume_builder.export_to_docx(text, path)
                 if ok:
-                    messagebox.showinfo("Exported", f"Resume saved to:\n{path}")
+                    _export_success_dialog(self, path)
                 else:
                     messagebox.showerror("Export Failed", export_err or "Could not save file.")
 
@@ -278,9 +311,10 @@ class JobDetailDialog(ctk.CTkToplevel):
 
         COPY_ICON = "\U0001F4CB"  # 📋 clipboard icon
 
+        border_color = "#444" if ctk.get_appearance_mode() in ("Dark", None) else "#bbb"
         def _section(title: str = None, copy_command=None):
             """Create a section frame with border. If copy_command given, add icon button at top."""
-            frame = ctk.CTkFrame(inner, fg_color="transparent", corner_radius=4, border_width=1, border_color="#444")
+            frame = ctk.CTkFrame(inner, fg_color="transparent", corner_radius=4, border_width=1, border_color=border_color)
             frame.pack(fill="x", pady=(0, 12))
             if title or copy_command:
                 header = ctk.CTkFrame(frame, fg_color="transparent")
@@ -452,7 +486,7 @@ class JobDetailDialog(ctk.CTkToplevel):
         if path:
             ok, err = resume_builder.export_to_docx(text, path)
             if ok:
-                messagebox.showinfo("Exported", f"Resume saved to:\n{path}")
+                _export_success_dialog(self, path)
             else:
                 messagebox.showerror("Export Failed", err or "Could not save file.")
 
@@ -481,8 +515,10 @@ class JobTrackerApp(ctk.CTk):
         self.tabview.set("Job Tracking")
 
         # Job Tracking tab content
+        _tab_bg = ("gray95", "gray17")  # theme-aware: light, dark
         job_tab = self.tabview.tab("Job Tracking")
-        top = ctk.CTkFrame(job_tab, fg_color="transparent")
+        job_tab.configure(fg_color=_tab_bg)
+        top = ctk.CTkFrame(job_tab, fg_color=_tab_bg)
         top.pack(fill="x", pady=(0, 10))
 
         ctk.CTkLabel(top, text="Job Tracker", font=("", 24, "bold")).pack(side="left")
@@ -491,7 +527,7 @@ class JobTrackerApp(ctk.CTk):
         self.stats_label.pack(side="left", padx=(30, 0))
 
         # Toolbar
-        toolbar = ctk.CTkFrame(job_tab, fg_color="transparent")
+        toolbar = ctk.CTkFrame(job_tab, fg_color=_tab_bg)
         toolbar.pack(fill="x", padx=20, pady=(0, 10))
         ctk.CTkButton(toolbar, text="+ Add Job", command=self._add_job, width=100).pack(side="left", padx=(0, 10))
         ctk.CTkButton(
@@ -513,9 +549,14 @@ class JobTrackerApp(ctk.CTk):
         )
         self.change_status_combo.pack(side="left", padx=(0, 0))
 
-        # Filters
-        filter_frame = ctk.CTkFrame(job_tab, fg_color="transparent")
-        filter_frame.pack(fill="x", padx=20, pady=(0, 10))
+        # Filters - horizontally scrollable
+        _tab_bg = ("gray95", "gray17")  # theme-aware: light, dark
+        filter_container = ctk.CTkFrame(job_tab, fg_color=_tab_bg)
+        filter_container.pack(fill="x", padx=20, pady=(0, 10))
+        filter_frame = ctk.CTkScrollableFrame(
+            filter_container, fg_color=_tab_bg, orientation="horizontal", height=50
+        )
+        filter_frame.pack(fill="x")
         ctk.CTkLabel(filter_frame, text="Company:").pack(side="left", padx=(0, 5))
         self.filter_company = ctk.CTkEntry(filter_frame, width=120, placeholder_text="Filter...")
         self.filter_company.pack(side="left", padx=(0, 15))
@@ -538,7 +579,7 @@ class JobTrackerApp(ctk.CTk):
         self.filter_status.set("all")
         self.filter_status.pack(side="left", padx=(0, 15))
         ctk.CTkLabel(filter_frame, text="Date from:").pack(side="left", padx=(0, 5))
-        df_frame = ctk.CTkFrame(filter_frame, fg_color="transparent")
+        df_frame = ctk.CTkFrame(filter_frame, fg_color=_tab_bg)
         df_frame.pack(side="left", padx=(0, 15))
         self.filter_date_from = ctk.CTkEntry(df_frame, width=100, placeholder_text="YYYY-MM-DD")
         self.filter_date_from.pack(side="left")
@@ -547,7 +588,7 @@ class JobTrackerApp(ctk.CTk):
         self._cal_btn_from = ctk.CTkButton(df_frame, text="📅", width=36, command=lambda: _show_date_picker(self, self.filter_date_from, self._cal_btn_from, self._on_filter))
         self._cal_btn_from.pack(side="left", padx=(5, 0))
         ctk.CTkLabel(filter_frame, text="Date to:").pack(side="left", padx=(0, 5))
-        dt_frame = ctk.CTkFrame(filter_frame, fg_color="transparent")
+        dt_frame = ctk.CTkFrame(filter_frame, fg_color=_tab_bg)
         dt_frame.pack(side="left", padx=(0, 15))
         self.filter_date_to = ctk.CTkEntry(dt_frame, width=100, placeholder_text="YYYY-MM-DD")
         self.filter_date_to.pack(side="left")
@@ -558,7 +599,7 @@ class JobTrackerApp(ctk.CTk):
         ctk.CTkButton(filter_frame, text="Clear", command=self._clear_filters, width=60, fg_color="gray").pack(side="left", padx=(10, 0))
 
         # Table frame - use tkinter Treeview for grid
-        table_frame = ctk.CTkFrame(job_tab, fg_color="transparent")
+        table_frame = ctk.CTkFrame(job_tab, fg_color=_tab_bg)
         table_frame.pack(fill="both", expand=True, padx=20, pady=(0, 20))
 
         columns = ("id", "company", "position", "status", "applied_date", "location")
@@ -588,35 +629,25 @@ class JobTrackerApp(ctk.CTk):
         self.tree.bind("<Return>", self._on_row_double_click)
         self.tree.bind("<<TreeviewSelect>>", lambda e: self._on_selection_change())
 
-        # Style for dark theme
-        style = ttk.Style()
-        style.theme_use("clam")
-        style.configure(
-            "Treeview",
-            background="#2b2b2b",
-            foreground="white",
-            fieldbackground="#2b2b2b",
-            rowheight=28,
-        )
-        style.configure("Treeview.Heading", background="#1f538d", foreground="white")
-        style.map("Treeview", background=[("selected", "#1f538d")])
-        style.map("Treeview.Heading", background=[("active", "#2a6bb5")])
+        self._apply_treeview_theme()
 
         # Settings tab content
         self._build_settings_tab()
 
     def _build_settings_tab(self):
+        _tab_bg = ("gray95", "gray17")  # theme-aware: light, dark
         settings_tab = self.tabview.tab("Settings")
-        scroll = ctk.CTkScrollableFrame(settings_tab, fg_color="transparent")
+        settings_tab.configure(fg_color=_tab_bg)
+        scroll = ctk.CTkScrollableFrame(settings_tab, fg_color=_tab_bg)
         scroll.pack(fill="both", expand=True)
-        inner = ctk.CTkFrame(scroll, fg_color="transparent")
+        inner = ctk.CTkFrame(scroll, fg_color=_tab_bg)
         inner.pack(fill="both", expand=True)
 
         ctk.CTkLabel(inner, text="Settings", font=("", 22, "bold")).pack(anchor="w", pady=(0, 20))
 
         # Appearance
         ctk.CTkLabel(inner, text="Appearance", font=("", 14, "bold")).pack(anchor="w", pady=(10, 5))
-        theme_frame = ctk.CTkFrame(inner, fg_color="transparent")
+        theme_frame = ctk.CTkFrame(inner, fg_color=_tab_bg)
         theme_frame.pack(fill="x", pady=(0, 20))
         ctk.CTkLabel(theme_frame, text="Theme:").pack(side="left", padx=(0, 10))
         self.theme_combo = ctk.CTkComboBox(
@@ -636,8 +667,26 @@ class JobTrackerApp(ctk.CTk):
         self.api_key_entry.pack(anchor="w", pady=(0, 5))
         if resume_builder.get_api_key():
             self.api_key_entry.insert(0, resume_builder.get_api_key())
+        ctk.CTkLabel(inner, text="Model:", font=("", 11)).pack(anchor="w", pady=(10, 2))
+        model_values = [
+            "gpt-5.2",
+            "gpt-5.1",
+            "gpt-5",
+            "gpt-5-mini",
+            "gpt-4o-mini",
+            "gpt-4o",
+            "gpt-4-turbo",
+            "gpt-4",
+            "gpt-3.5-turbo",
+            "o1-mini",
+            "o1",
+        ]
+        self.model_combo = ctk.CTkComboBox(inner, values=model_values, width=200)
+        self.model_combo.pack(anchor="w", pady=(0, 5))
+        saved_model = resume_builder.get_model()
+        self.model_combo.set(saved_model if saved_model in model_values else "gpt-4o-mini")
         ctk.CTkLabel(inner, text="Base Resume (your resume text to tailor):", font=("", 11)).pack(anchor="w", pady=(10, 2))
-        resume_btn_frame = ctk.CTkFrame(inner, fg_color="transparent")
+        resume_btn_frame = ctk.CTkFrame(inner, fg_color=_tab_bg)
         resume_btn_frame.pack(anchor="w", pady=(0, 5))
         ctk.CTkButton(resume_btn_frame, text="Upload .docx / .pdf", command=self._upload_resume, width=140).pack(side="left", padx=(0, 10))
         ctk.CTkButton(resume_btn_frame, text="Save", command=self._save_resume_settings, width=80).pack(side="left")
@@ -669,12 +718,35 @@ class JobTrackerApp(ctk.CTk):
 
     def _save_resume_settings(self):
         resume_builder.save_api_key(self.api_key_entry.get().strip())
+        resume_builder.save_model(self.model_combo.get().strip())
         resume_builder.save_base_resume(self.base_resume_text.get("1.0", "end").strip())
         messagebox.showinfo("Saved", "Resume builder settings saved.")
 
+    def _apply_treeview_theme(self):
+        """Apply Treeview styles - white cell background, theme-aware heading."""
+        cell_bg, cell_fg = "#ffffff", "#1a1a1a"
+        heading_bg, heading_active, selected = "#1f538d", "#2a6bb5", "#1f538d"
+        for st in database.STATUSES:
+            for suffix in ("_0", "_1"):
+                self.tree.tag_configure(f"{st}{suffix}", background=cell_bg, foreground=cell_fg)
+        style = ttk.Style()
+        style.theme_use("clam")
+        style.configure(
+            "Treeview",
+            background=cell_bg,
+            foreground=cell_fg,
+            fieldbackground=cell_bg,
+            rowheight=28,
+        )
+        style.configure("Treeview.Heading", background=heading_bg, foreground="white")
+        style.map("Treeview", background=[("selected", selected)])
+        style.map("Treeview.Heading", background=[("active", heading_active)])
+
     def _on_theme_change(self, value: str):
-        mode = value.lower()
-        ctk.set_appearance_mode(mode)
+        display = value if value in ("Dark", "Light", "System") else value.capitalize()
+        ctk.set_appearance_mode(display.lower())
+        resume_builder.save_theme(display)
+        self._apply_treeview_theme()
 
     def _get_filters(self) -> dict:
         status = self.filter_status.get()
@@ -705,7 +777,8 @@ class JobTrackerApp(ctk.CTk):
 
         filters = self._get_filters()
         jobs = database.get_all_jobs(**filters)
-        for j in jobs:
+        for idx, j in enumerate(jobs):
+            status = j.get("status") or "applied"
             self.tree.insert(
                 "",
                 "end",
@@ -714,10 +787,11 @@ class JobTrackerApp(ctk.CTk):
                     j["id"],
                     j["company"],
                     j["position"],
-                    j["status"],
+                    status,
                     j.get("applied_date") or "",
                     j.get("location") or "",
                 ),
+                tags=(f"{status}_{idx % 2}",),
             )
         self._update_stats(len(jobs))
         self._on_selection_change()
@@ -824,6 +898,8 @@ class JobTrackerApp(ctk.CTk):
 
 def run_gui():
     """Launch the GUI application."""
+    saved_theme = resume_builder.get_theme()
+    ctk.set_appearance_mode(saved_theme.lower())
     app = JobTrackerApp()
     app.update_idletasks()
     # Start full screen; use geometry fallback if zoom fails
