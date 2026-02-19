@@ -40,16 +40,23 @@ def extract_text_from_file(filepath: str) -> Tuple[str, Optional[str]]:
         return "", "Unsupported format. Use .pdf or .docx"
 
 from .paths import BASE_PATH
+from .profile_manager import get_profile_config_path, get_current_profile
 
-CONFIG_PATH = BASE_PATH / "config.json"
+def get_config_path() -> Path:
+    """Get the config path for the current profile."""
+    return get_profile_config_path()
+
+CONFIG_PATH = property(lambda self: get_config_path())  # For backward compatibility
 
 
 def _load_config() -> dict:
     """Load config from JSON file."""
     import json
-    if CONFIG_PATH.exists():
+    config_path = get_config_path()
+    config_path.parent.mkdir(parents=True, exist_ok=True)  # Ensure profile directory exists
+    if config_path.exists():
         try:
-            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+            with open(config_path, "r", encoding="utf-8") as f:
                 return json.load(f)
         except (json.JSONDecodeError, OSError):
             pass
@@ -59,14 +66,20 @@ def _load_config() -> dict:
 def _save_config(config: dict) -> None:
     """Save config to JSON file."""
     import json
+    config_path = get_config_path()
+    config_path.parent.mkdir(parents=True, exist_ok=True)  # Ensure profile directory exists
     try:
-        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+        with open(config_path, "w", encoding="utf-8") as f:
             json.dump(config, f, indent=2)
     except OSError:
         pass
 
 
-_KEYRING_SERVICE = "JobTracker"
+def _get_keyring_service() -> str:
+    """Get keyring service name for current profile."""
+    profile = get_current_profile()
+    return f"JobTracker-{profile}" if profile else "JobTracker"
+
 _KEYRING_USER = "openai_api_key"
 
 
@@ -74,7 +87,8 @@ def get_api_key() -> Optional[str]:
     """Get OpenAI API key from keyring, config (legacy), or environment."""
     try:
         import keyring
-        key = keyring.get_password(_KEYRING_SERVICE, _KEYRING_USER)
+        service = _get_keyring_service()
+        key = keyring.get_password(service, _KEYRING_USER)
         if key and key.strip():
             return key.strip()
     except Exception:
@@ -86,7 +100,8 @@ def get_api_key() -> Optional[str]:
         # Migrate to keyring and remove from config
         try:
             import keyring
-            keyring.set_password(_KEYRING_SERVICE, _KEYRING_USER, key)
+            service = _get_keyring_service()
+            keyring.set_password(service, _KEYRING_USER, key)
             config.pop("openai_api_key", None)
             _save_config(config)
         except Exception:
@@ -103,12 +118,13 @@ def get_base_resume() -> str:
 def save_api_key(key: str) -> None:
     """Save OpenAI API key to keyring (OS credential store)."""
     import keyring
+    service = _get_keyring_service()
     key = (key or "").strip()
     if key:
-        keyring.set_password(_KEYRING_SERVICE, _KEYRING_USER, key)
+        keyring.set_password(service, _KEYRING_USER, key)
     else:
         try:
-            keyring.delete_password(_KEYRING_SERVICE, _KEYRING_USER)
+            keyring.delete_password(service, _KEYRING_USER)
         except Exception:
             pass  # Password may not exist
     # Remove from config if present (migrate away from plain text)

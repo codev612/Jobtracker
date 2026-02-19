@@ -6,22 +6,54 @@ from datetime import datetime
 from typing import Optional
 
 from .paths import BASE_PATH
+from .profile_manager import get_profile_database_path
 
 # Default status options for job applications
 STATUSES = ["wishlist", "applying", "applied", "interviewing", "offer", "rejected", "accepted"]
 
-DATABASE_PATH = BASE_PATH / "jobs.db"
+
+def get_database_path() -> Path:
+    """Get the database path for the current profile."""
+    return get_profile_database_path()
+
+
+# For backward compatibility - use get_database_path() for dynamic access
+# This is evaluated at import time; use get_database_path() for current profile
+DATABASE_PATH = BASE_PATH / "jobs.db"  # Legacy default, use get_database_path() instead
 
 
 def get_connection() -> sqlite3.Connection:
-    """Get a database connection."""
-    conn = sqlite3.connect(DATABASE_PATH)
+    """Get a database connection. Ensures database is initialized."""
+    db_path = get_database_path()
+    db_path.parent.mkdir(parents=True, exist_ok=True)  # Ensure profile directory exists
+    conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row  # Return rows as dict-like objects
+    # Ensure table exists (in case init_db wasn't called for this profile)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS jobs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            company TEXT NOT NULL,
+            position TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'applied',
+            applied_date TEXT,
+            salary TEXT,
+            location TEXT,
+            url TEXT,
+            description TEXT,
+            notes TEXT,
+            tailored_resume TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+    """)
+    conn.commit()
     return conn
 
 
 def init_db() -> None:
     """Initialize the database and create tables if they don't exist."""
+    db_path = get_database_path()
+    db_path.parent.mkdir(parents=True, exist_ok=True)  # Ensure profile directory exists
     conn = get_connection()
     conn.execute("""
         CREATE TABLE IF NOT EXISTS jobs (

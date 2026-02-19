@@ -12,6 +12,7 @@ from tkcalendar import DateEntry, Calendar
 
 from . import database
 from . import resume_builder
+from . import profile_manager
 
 
 def _export_success_dialog(parent, path: str) -> None:
@@ -525,6 +526,21 @@ class JobTrackerApp(ctk.CTk):
 
         self.stats_label = ctk.CTkLabel(top, text="", font=("", 12))
         self.stats_label.pack(side="left", padx=(30, 0))
+        
+        # Profile selector on Job Tracking page
+        profile_selector_frame = ctk.CTkFrame(top, fg_color=_tab_bg)
+        profile_selector_frame.pack(side="right")
+        ctk.CTkLabel(profile_selector_frame, text="Profile:", font=("", 11)).pack(side="left", padx=(0, 5))
+        self.job_tab_profile_combo = ctk.CTkComboBox(
+            profile_selector_frame,
+            values=profile_manager.list_profiles(),
+            width=120,
+            command=self._on_profile_change,
+        )
+        current_profile = profile_manager.get_current_profile()
+        if current_profile:
+            self.job_tab_profile_combo.set(current_profile)
+        self.job_tab_profile_combo.pack(side="left")
 
         # Toolbar
         toolbar = ctk.CTkFrame(job_tab, fg_color=_tab_bg)
@@ -695,10 +711,30 @@ class JobTrackerApp(ctk.CTk):
         if resume_builder.get_base_resume():
             self.base_resume_text.insert("1.0", resume_builder.get_base_resume())
 
+        # Profile management
+        ctk.CTkLabel(inner, text="Profile", font=("", 14, "bold")).pack(anchor="w", pady=(20, 5))
+        profile_frame = ctk.CTkFrame(inner, fg_color=_tab_bg)
+        profile_frame.pack(fill="x", pady=(0, 10))
+        ctk.CTkLabel(profile_frame, text="Current Profile:").pack(side="left", padx=(0, 10))
+        self.profile_combo = ctk.CTkComboBox(
+            profile_frame,
+            values=profile_manager.list_profiles(),
+            width=150,
+            command=self._on_profile_change,
+        )
+        current_profile = profile_manager.get_current_profile()
+        if current_profile:
+            self.profile_combo.set(current_profile)
+        self.profile_combo.pack(side="left", padx=(0, 10))
+        ctk.CTkButton(profile_frame, text="New Profile", command=self._create_profile, width=100).pack(side="left", padx=(0, 5))
+        ctk.CTkButton(profile_frame, text="Rename", command=self._rename_profile, width=80).pack(side="left", padx=(0, 5))
+        ctk.CTkButton(profile_frame, text="Delete", command=self._delete_profile, width=80, fg_color="#c0392b", hover_color="#a93226").pack(side="left")
+
         # Database info
         ctk.CTkLabel(inner, text="Data", font=("", 14, "bold")).pack(anchor="w", pady=(20, 5))
-        db_path = str(database.DATABASE_PATH)
-        ctk.CTkLabel(inner, text=f"Database: {db_path}", font=("", 11), anchor="w").pack(anchor="w")
+        db_path = str(database.get_database_path())
+        self.db_path_label = ctk.CTkLabel(inner, text=f"Database: {db_path}", font=("", 11), anchor="w")
+        self.db_path_label.pack(anchor="w")
 
     def _upload_resume(self):
         path = filedialog.askopenfilename(
@@ -747,6 +783,159 @@ class JobTrackerApp(ctk.CTk):
         ctk.set_appearance_mode(display.lower())
         resume_builder.save_theme(display)
         self._apply_treeview_theme()
+
+    def _reload_settings(self):
+        """Reload settings from current profile's config."""
+        # Reload API key
+        self.api_key_entry.delete(0, "end")
+        api_key = resume_builder.get_api_key()
+        if api_key:
+            self.api_key_entry.insert(0, api_key)
+        # Reload model
+        saved_model = resume_builder.get_model()
+        model_values = self.model_combo.cget("values")
+        self.model_combo.set(saved_model if saved_model in model_values else "gpt-4o-mini")
+        # Reload base resume
+        self.base_resume_text.delete("1.0", "end")
+        base_resume = resume_builder.get_base_resume()
+        if base_resume:
+            self.base_resume_text.insert("1.0", base_resume)
+        # Update database path display
+        if hasattr(self, "db_path_label"):
+            db_path = str(database.get_database_path())
+            self.db_path_label.configure(text=f"Database: {db_path}")
+
+    def _on_profile_change(self, profile_name: str):
+        """Switch to a different profile and refresh data."""
+        if profile_name:
+            profile_manager.set_current_profile(profile_name)
+            # Re-initialize database for new profile
+            database.init_db()
+            # Refresh job list
+            self._refresh_list()
+            # Reload settings for new profile
+            self._reload_settings()
+            # Update both profile combos
+            profiles = profile_manager.list_profiles()
+            self.profile_combo.configure(values=profiles)
+            self.profile_combo.set(profile_name)
+            if hasattr(self, "job_tab_profile_combo"):
+                self.job_tab_profile_combo.configure(values=profiles)
+                self.job_tab_profile_combo.set(profile_name)
+
+    def _create_profile(self):
+        """Create a new profile."""
+        dialog = ctk.CTkToplevel(self)
+        dialog.title("New Profile")
+        dialog.geometry("400x150")
+        dialog.transient(self)
+        dialog.grab_set()
+        
+        ctk.CTkLabel(dialog, text="Profile Name:", font=("", 12)).pack(anchor="w", padx=20, pady=(20, 5))
+        name_entry = ctk.CTkEntry(dialog, width=350)
+        name_entry.pack(padx=20, pady=(0, 20))
+        name_entry.focus()
+        
+        def on_ok():
+            name = name_entry.get().strip()
+            if not name:
+                messagebox.showerror("Error", "Profile name cannot be empty.")
+                return
+            if profile_manager.create_profile(name):
+                profile_manager.set_current_profile(name)
+                database.init_db()
+                profiles = profile_manager.list_profiles()
+                self.profile_combo.configure(values=profiles)
+                self.profile_combo.set(name)
+                if hasattr(self, "job_tab_profile_combo"):
+                    self.job_tab_profile_combo.configure(values=profiles)
+                    self.job_tab_profile_combo.set(name)
+                self._refresh_list()
+                self._reload_settings()
+                dialog.destroy()
+                messagebox.showinfo("Created", f"Profile '{name}' created and activated.")
+            else:
+                messagebox.showerror("Error", f"Profile '{name}' already exists.")
+        
+        btn_frame = ctk.CTkFrame(dialog, fg_color="transparent")
+        btn_frame.pack(fill="x", padx=20, pady=(0, 20))
+        ctk.CTkButton(btn_frame, text="Create", command=on_ok, width=100).pack(side="left", padx=(0, 10))
+        ctk.CTkButton(btn_frame, text="Cancel", command=dialog.destroy, width=100, fg_color="gray").pack(side="left")
+        name_entry.bind("<Return>", lambda e: on_ok())
+
+    def _rename_profile(self):
+        """Rename the current profile."""
+        current = profile_manager.get_current_profile()
+        if not current:
+            messagebox.showinfo("No Profile", "No profile selected.")
+            return
+        
+        dialog = ctk.CTkToplevel(self)
+        dialog.title("Rename Profile")
+        dialog.geometry("400x150")
+        dialog.transient(self)
+        dialog.grab_set()
+        
+        ctk.CTkLabel(dialog, text="New Profile Name:", font=("", 12)).pack(anchor="w", padx=20, pady=(20, 5))
+        name_entry = ctk.CTkEntry(dialog, width=350)
+        name_entry.pack(padx=20, pady=(0, 20))
+        name_entry.insert(0, current)
+        name_entry.select_range(0, "end")
+        name_entry.focus()
+        
+        def on_ok():
+            new_name = name_entry.get().strip()
+            if not new_name:
+                messagebox.showerror("Error", "Profile name cannot be empty.")
+                return
+            if new_name == current:
+                dialog.destroy()
+                return
+            if profile_manager.rename_profile(current, new_name):
+                profiles = profile_manager.list_profiles()
+                self.profile_combo.configure(values=profiles)
+                self.profile_combo.set(new_name)
+                if hasattr(self, "job_tab_profile_combo"):
+                    self.job_tab_profile_combo.configure(values=profiles)
+                    self.job_tab_profile_combo.set(new_name)
+                dialog.destroy()
+                messagebox.showinfo("Renamed", f"Profile renamed to '{new_name}'.\nPlease restart the application for changes to take effect.")
+            else:
+                messagebox.showerror("Error", f"Profile '{new_name}' already exists or rename failed.")
+        
+        btn_frame = ctk.CTkFrame(dialog, fg_color="transparent")
+        btn_frame.pack(fill="x", padx=20, pady=(0, 20))
+        ctk.CTkButton(btn_frame, text="Rename", command=on_ok, width=100).pack(side="left", padx=(0, 10))
+        ctk.CTkButton(btn_frame, text="Cancel", command=dialog.destroy, width=100, fg_color="gray").pack(side="left")
+        name_entry.bind("<Return>", lambda e: on_ok())
+
+    def _delete_profile(self):
+        """Delete the current profile."""
+        current = profile_manager.get_current_profile()
+        if not current:
+            messagebox.showinfo("No Profile", "No profile selected.")
+            return
+        profiles = profile_manager.list_profiles()
+        if len(profiles) <= 1:
+            messagebox.showwarning("Cannot Delete", "Cannot delete the last profile.")
+            return
+        if messagebox.askyesno("Confirm Delete", f"Delete profile '{current}'?\n\nThis will permanently delete all jobs and settings for this profile."):
+            if profile_manager.delete_profile(current):
+                new_current = profile_manager.get_current_profile()
+                profiles = profile_manager.list_profiles()
+                self.profile_combo.configure(values=profiles)
+                if hasattr(self, "job_tab_profile_combo"):
+                    self.job_tab_profile_combo.configure(values=profiles)
+                if new_current:
+                    self.profile_combo.set(new_current)
+                    if hasattr(self, "job_tab_profile_combo"):
+                        self.job_tab_profile_combo.set(new_current)
+                    database.init_db()
+                    self._refresh_list()
+                    self._reload_settings()
+                messagebox.showinfo("Deleted", f"Profile '{current}' deleted.")
+            else:
+                messagebox.showerror("Error", "Failed to delete profile.")
 
     def _get_filters(self) -> dict:
         status = self.filter_status.get()
@@ -896,8 +1085,95 @@ class JobTrackerApp(ctk.CTk):
         self._refresh_list()
 
 
+def _show_profile_selection() -> str | None:
+    """Show profile selection dialog. Returns selected profile name or None."""
+    profiles = profile_manager.list_profiles()
+    current = profile_manager.get_current_profile()
+    
+    if not profiles:
+        # No profiles exist - create default
+        profile_manager.create_profile("Default")
+        profile_manager.set_current_profile("Default")
+        return "Default"
+    
+    if current and current in profiles:
+        return current
+    
+    # Show selection dialog
+    root = ctk.CTk()
+    root.title("Select Profile")
+    root.geometry("400x250")
+    root.withdraw()  # Hide until ready
+    
+    selected_profile = [None]
+    
+    def on_select():
+        selected_profile[0] = profile_combo.get()
+        if selected_profile[0]:
+            profile_manager.set_current_profile(selected_profile[0])
+        root.destroy()
+    
+    def on_new():
+        name = new_entry.get().strip()
+        if not name:
+            messagebox.showerror("Error", "Profile name cannot be empty.")
+            return
+        if profile_manager.create_profile(name):
+            profile_combo.configure(values=profile_manager.list_profiles())
+            profile_combo.set(name)
+            messagebox.showinfo("Created", f"Profile '{name}' created.")
+        else:
+            messagebox.showerror("Error", f"Profile '{name}' already exists.")
+    
+    inner = ctk.CTkFrame(root, fg_color="transparent")
+    inner.pack(fill="both", expand=True, padx=20, pady=20)
+    
+    ctk.CTkLabel(inner, text="Select Profile", font=("", 18, "bold")).pack(anchor="w", pady=(0, 10))
+    ctk.CTkLabel(inner, text="Each profile has its own jobs and settings.", font=("", 11)).pack(anchor="w", pady=(0, 15))
+    
+    profile_combo = ctk.CTkComboBox(inner, values=profiles, width=350)
+    profile_combo.pack(fill="x", pady=(0, 15))
+    if profiles:
+        profile_combo.set(profiles[0])
+    
+    ctk.CTkLabel(inner, text="Or create new:", font=("", 11)).pack(anchor="w", pady=(0, 5))
+    new_frame = ctk.CTkFrame(inner, fg_color="transparent")
+    new_frame.pack(fill="x", pady=(0, 15))
+    new_entry = ctk.CTkEntry(new_frame, width=250, placeholder_text="Profile name...")
+    new_entry.pack(side="left", padx=(0, 10))
+    ctk.CTkButton(new_frame, text="Create", command=on_new, width=90).pack(side="left")
+    
+    btn_frame = ctk.CTkFrame(inner, fg_color="transparent")
+    btn_frame.pack(fill="x")
+    ctk.CTkButton(btn_frame, text="Select", command=on_select, width=100).pack(side="right", padx=(10, 0))
+    
+    def on_closing():
+        root.destroy()
+    
+    root.protocol("WM_DELETE_WINDOW", on_closing)
+    root.deiconify()
+    root.mainloop()
+    return selected_profile[0] if selected_profile[0] else (profiles[0] if profiles else None)
+
+
 def run_gui():
     """Launch the GUI application."""
+    # Ensure a profile is selected
+    profile = _show_profile_selection()
+    if not profile:
+        # Fallback: use first profile or create default
+        profiles = profile_manager.list_profiles()
+        if profiles:
+            profile = profiles[0]
+            profile_manager.set_current_profile(profile)
+        else:
+            profile_manager.create_profile("Default")
+            profile_manager.set_current_profile("Default")
+            profile = "Default"
+    
+    # Initialize database for the selected profile
+    database.init_db()
+    
     saved_theme = resume_builder.get_theme()
     ctk.set_appearance_mode(saved_theme.lower())
     app = JobTrackerApp()
