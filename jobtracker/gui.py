@@ -619,13 +619,12 @@ class JobTrackerApp(ctk.CTk):
         table_frame.pack(fill="both", expand=True, padx=20, pady=(0, 20))
 
         columns = ("id", "company", "position", "status", "applied_date", "location")
+        self._tree_heading_text = {"id": "ID", "company": "Company", "position": "Position", "status": "Status", "applied_date": "Applied", "location": "Location"}
         self.tree = ttk.Treeview(table_frame, columns=columns, show="headings", height=15, selectmode="browse")
-        self.tree.heading("id", text="ID")
-        self.tree.heading("company", text="Company")
-        self.tree.heading("position", text="Position")
-        self.tree.heading("status", text="Status")
-        self.tree.heading("applied_date", text="Applied")
-        self.tree.heading("location", text="Location")
+        self._sort_column = None
+        self._sort_reverse = False
+        for col in columns:
+            self.tree.heading(col, text=self._tree_heading_text[col], command=lambda c=col: self._sort_by_column(c))
 
         self.tree.column("id", width=50)
         self.tree.column("company", width=180)
@@ -645,6 +644,7 @@ class JobTrackerApp(ctk.CTk):
         self.tree.bind("<Return>", self._on_row_double_click)
         self.tree.bind("<<TreeviewSelect>>", lambda e: self._on_selection_change())
 
+        self._update_sort_headings()
         self._apply_treeview_theme()
 
         # Settings tab content
@@ -960,12 +960,38 @@ class JobTrackerApp(ctk.CTk):
     def _on_filter(self, _=None):
         self._refresh_list()
 
+    def _sort_by_column(self, column: str):
+        if self._sort_column == column:
+            self._sort_reverse = not self._sort_reverse
+        else:
+            self._sort_column = column
+            self._sort_reverse = False
+        self._update_sort_headings()
+        self._refresh_list()
+
+    def _update_sort_headings(self):
+        for col, label in self._tree_heading_text.items():
+            text = label
+            if self._sort_column == col:
+                text += " \u25b2" if not self._sort_reverse else " \u25bc"
+            self.tree.heading(col, text=text, command=lambda c=col: self._sort_by_column(c))
+
     def _refresh_list(self):
         for item in self.tree.get_children():
             self.tree.delete(item)
 
         filters = self._get_filters()
         jobs = database.get_all_jobs(**filters)
+        if self._sort_column:
+            key_col = self._sort_column
+            def sort_key(j):
+                v = j.get(key_col) if key_col != "status" else (j.get("status") or "applied")
+                if key_col == "id":
+                    return (0, v) if v is not None else (1, 0)
+                if v is None or v == "":
+                    return (1, "")
+                return (0, str(v).lower() if isinstance(v, str) else v)
+            jobs = sorted(jobs, key=sort_key, reverse=self._sort_reverse)
         for idx, j in enumerate(jobs):
             status = j.get("status") or "applied"
             self.tree.insert(
