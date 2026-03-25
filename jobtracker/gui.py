@@ -97,7 +97,11 @@ class JobFormDialog(ctk.CTkToplevel):
         self.job = job
         self.result = None
 
-        self.geometry("500x640")
+        self._url_check_after_id = None
+        self._url_default_border_color = None
+        self._url_is_duplicate = False
+
+        self.geometry("520x780")
         self.resizable(True, True)
 
         # Make modal
@@ -157,7 +161,13 @@ class JobFormDialog(ctk.CTkToplevel):
         # URL
         ctk.CTkLabel(scroll, text="Job URL").pack(anchor="w", **pad)
         self.url_var = ctk.StringVar()
-        ctk.CTkEntry(scroll, textvariable=self.url_var, width=400).pack(fill="x", **pad)
+        self.url_entry = ctk.CTkEntry(scroll, textvariable=self.url_var, width=400)
+        self.url_entry.pack(fill="x", **pad)
+        try:
+            self._url_default_border_color = self.url_entry.cget("border_color")
+        except Exception:
+            self._url_default_border_color = None
+        self.url_var.trace_add("write", self._on_url_var_change)
 
         # Job Description
         ctk.CTkLabel(scroll, text="Job Description").pack(anchor="w", **pad)
@@ -168,6 +178,16 @@ class JobFormDialog(ctk.CTkToplevel):
         ctk.CTkLabel(scroll, text="Notes").pack(anchor="w", **pad)
         self.notes_text = ctk.CTkTextbox(scroll, height=80, width=400)
         self.notes_text.pack(fill="x", **pad)
+
+        # Applied resume (text)
+        ctk.CTkLabel(scroll, text="Applied Resume (Text)").pack(anchor="w", **pad)
+        self.applied_resume_text = ctk.CTkTextbox(scroll, height=140, width=400)
+        self.applied_resume_text.pack(fill="x", **pad)
+
+        # Cover letter (text)
+        ctk.CTkLabel(scroll, text="Cover Letter (Text)").pack(anchor="w", **pad)
+        self.cover_letter_text = ctk.CTkTextbox(scroll, height=140, width=400)
+        self.cover_letter_text.pack(fill="x", **pad)
 
         # Buttons (fixed at bottom)
         btn_frame = ctk.CTkFrame(self, fg_color="transparent")
@@ -197,6 +217,63 @@ class JobFormDialog(ctk.CTkToplevel):
         self.notes_text.delete("1.0", "end")
         self.notes_text.insert("1.0", self.job.get("notes", "") or "")
 
+        if hasattr(self, "applied_resume_text"):
+            self.applied_resume_text.delete("1.0", "end")
+            self.applied_resume_text.insert("1.0", self.job.get("applied_resume_text", "") or "")
+        if hasattr(self, "cover_letter_text"):
+            self.cover_letter_text.delete("1.0", "end")
+            self.cover_letter_text.insert("1.0", self.job.get("cover_letter_text", "") or "")
+
+        # Ensure duplicate indicator state matches loaded content.
+        self._check_url_duplicate()
+
+
+    def _on_url_var_change(self, *_):
+        """Debounce URL duplicate checks while typing."""
+        if self._url_check_after_id is not None:
+            try:
+                self.after_cancel(self._url_check_after_id)
+            except Exception:
+                pass
+            self._url_check_after_id = None
+        self._url_check_after_id = self.after(250, self._check_url_duplicate)
+
+
+    def _set_url_duplicate_flag(self, is_duplicate: bool) -> None:
+        self._url_is_duplicate = is_duplicate
+        if not hasattr(self, "url_entry"):
+            return
+        if not is_duplicate:
+            if self._url_default_border_color is not None:
+                try:
+                    self.url_entry.configure(border_color=self._url_default_border_color)
+                except Exception:
+                    pass
+            return
+        try:
+            self.url_entry.configure(border_color="red")
+        except Exception:
+            pass
+
+
+    def _check_url_duplicate(self) -> None:
+        self._url_check_after_id = None
+
+        url = (self.url_var.get() or "").strip()
+        if not url:
+            self._set_url_duplicate_flag(False)
+            return
+
+        exclude_id = None
+        if self.job and isinstance(self.job, dict):
+            exclude_id = self.job.get("id")
+
+        try:
+            exists = database.job_url_exists(url, exclude_job_id=exclude_id)
+        except Exception:
+            exists = False
+        self._set_url_duplicate_flag(exists)
+
     def _get_values(self) -> dict:
         return {
             "company": self.company_var.get().strip(),
@@ -208,6 +285,8 @@ class JobFormDialog(ctk.CTkToplevel):
             "url": self.url_var.get().strip() or None,
             "description": self.description_text.get("1.0", "end").strip() or None,
             "notes": self.notes_text.get("1.0", "end").strip() or None,
+            "applied_resume_text": self.applied_resume_text.get("1.0", "end").strip() or None,
+            "cover_letter_text": self.cover_letter_text.get("1.0", "end").strip() or None,
         }
 
     def _on_save(self):
@@ -338,6 +417,8 @@ class JobDetailDialog(ctk.CTkToplevel):
             ("Location", self.job.get("location")),
             ("Salary", self.job.get("salary")),
             ("URL", self.job.get("url")),
+            ("Applied Resume File", self.job.get("applied_resume_path")),
+            ("Cover Letter File", self.job.get("cover_letter_path")),
         ]
         for label, value in fields:
             if value:
@@ -346,6 +427,20 @@ class JobDetailDialog(ctk.CTkToplevel):
                 if label == "URL":
                     ctk.CTkButton(
                         row, text=COPY_ICON, command=self._copy_url, width=32, fg_color="transparent"
+                    ).pack(side="left", padx=(0, 6))
+                elif label == "Applied Resume File":
+                    ctk.CTkButton(
+                        row, text="Open", command=self._open_applied_resume, width=44, fg_color="transparent"
+                    ).pack(side="left", padx=(0, 6))
+                    ctk.CTkButton(
+                        row, text=COPY_ICON, command=self._copy_applied_resume_path, width=32, fg_color="transparent"
+                    ).pack(side="left", padx=(0, 6))
+                elif label == "Cover Letter File":
+                    ctk.CTkButton(
+                        row, text="Open", command=self._open_cover_letter, width=44, fg_color="transparent"
+                    ).pack(side="left", padx=(0, 6))
+                    ctk.CTkButton(
+                        row, text=COPY_ICON, command=self._copy_cover_letter_path, width=32, fg_color="transparent"
                     ).pack(side="left", padx=(0, 6))
                 ctk.CTkLabel(row, text=f"{label}:", font=("", 12, "bold")).pack(side="left", padx=(0, 6))
                 ctk.CTkLabel(row, text=str(value), anchor="w", justify="left").pack(side="left", fill="x", expand=True)
@@ -364,6 +459,24 @@ class JobDetailDialog(ctk.CTkToplevel):
             notes_section = _section("Notes")
             notes_lbl = ctk.CTkLabel(notes_section, text=notes, anchor="w", justify="left", wraplength=400)
             notes_lbl.pack(anchor="w", padx=10, pady=(0, 10))
+
+        # Applied Resume (text) section
+        applied_resume_text = self.job.get("applied_resume_text")
+        if applied_resume_text:
+            applied_resume_section = _section("Applied Resume (Text)", copy_command=self._copy_applied_resume_text)
+            self.applied_resume_textbox = ctk.CTkTextbox(applied_resume_section, height=180, width=400)
+            self.applied_resume_textbox.pack(anchor="w", padx=10, pady=(0, 10))
+            self.applied_resume_textbox.insert("1.0", applied_resume_text)
+            self.applied_resume_textbox.configure(state="disabled")
+
+        # Cover Letter (text) section
+        cover_letter_text = self.job.get("cover_letter_text")
+        if cover_letter_text:
+            cover_letter_section = _section("Cover Letter (Text)", copy_command=self._copy_cover_letter_text)
+            self.cover_letter_textbox = ctk.CTkTextbox(cover_letter_section, height=180, width=400)
+            self.cover_letter_textbox.pack(anchor="w", padx=10, pady=(0, 10))
+            self.cover_letter_textbox.insert("1.0", cover_letter_text)
+            self.cover_letter_textbox.configure(state="disabled")
 
         # Tailored Resume section
         resume_section = _section("Tailored Resume", copy_command=self._copy_resume)
@@ -459,6 +572,44 @@ class JobDetailDialog(ctk.CTkToplevel):
         if url:
             self.clipboard_clear()
             self.clipboard_append(url)
+
+    def _copy_applied_resume_path(self):
+        path = self.job.get("applied_resume_path")
+        if path:
+            self.clipboard_clear()
+            self.clipboard_append(path)
+
+    def _copy_cover_letter_path(self):
+        path = self.job.get("cover_letter_path")
+        if path:
+            self.clipboard_clear()
+            self.clipboard_append(path)
+
+    def _copy_applied_resume_text(self):
+        text = self.job.get("applied_resume_text")
+        if text:
+            self.clipboard_clear()
+            self.clipboard_append(text)
+
+    def _copy_cover_letter_text(self):
+        text = self.job.get("cover_letter_text")
+        if text:
+            self.clipboard_clear()
+            self.clipboard_append(text)
+
+    def _open_applied_resume(self):
+        path = self.job.get("applied_resume_path")
+        if path and os.path.exists(path):
+            _open_file(path)
+        elif path:
+            messagebox.showwarning("File not found", "The applied resume path does not exist.")
+
+    def _open_cover_letter(self):
+        path = self.job.get("cover_letter_path")
+        if path and os.path.exists(path):
+            _open_file(path)
+        elif path:
+            messagebox.showwarning("File not found", "The cover letter path does not exist.")
 
     def _copy_description(self):
         description = self.job.get("description")
@@ -759,12 +910,19 @@ class JobTrackerApp(ctk.CTk):
         messagebox.showinfo("Saved", "Resume builder settings saved.")
 
     def _apply_treeview_theme(self):
-        """Apply Treeview styles - white cell background, theme-aware heading."""
-        cell_bg, cell_fg = "#ffffff", "#1a1a1a"
+        """Apply Treeview styles - uniform row background, theme-aware heading."""
+        appearance = ctk.get_appearance_mode()
+        if appearance == "Dark":
+            cell_bg, cell_fg = "#1e1e1e", "#f5f5f5"
+        else:
+            cell_bg, cell_fg = "#ffffff", "#1a1a1a"
         heading_bg, heading_active, selected = "#1f538d", "#2a6bb5", "#1f538d"
+
+        # Configure tags used per-row: f"{status}_{idx % 2}" – keep rows uniform
         for st in database.STATUSES:
             for suffix in ("_0", "_1"):
                 self.tree.tag_configure(f"{st}{suffix}", background=cell_bg, foreground=cell_fg)
+
         style = ttk.Style()
         style.theme_use("clam")
         style.configure(
@@ -992,8 +1150,18 @@ class JobTrackerApp(ctk.CTk):
                     return (1, "")
                 return (0, str(v).lower() if isinstance(v, str) else v)
             jobs = sorted(jobs, key=sort_key, reverse=self._sort_reverse)
+        status_display = {
+            "wishlist": "💭 wishlist",
+            "applying": "✉️ applying",
+            "applied": "📬 applied",
+            "interviewing": "🗣 interviewing",
+            "offer": "🏆 offer",
+            "rejected": "❌ rejected",
+            "accepted": "✅ accepted",
+        }
         for idx, j in enumerate(jobs):
             status = j.get("status") or "applied"
+            status_text = status_display.get(status, status)
             self.tree.insert(
                 "",
                 "end",
@@ -1002,7 +1170,7 @@ class JobTrackerApp(ctk.CTk):
                     j["id"],
                     j["company"],
                     j["position"],
-                    status,
+                    status_text,
                     j.get("applied_date") or "",
                     j.get("location") or "",
                 ),
@@ -1071,6 +1239,8 @@ class JobTrackerApp(ctk.CTk):
                 url=vals["url"],
                 description=vals.get("description"),
                 notes=vals.get("notes"),
+                applied_resume_text=vals.get("applied_resume_text"),
+                cover_letter_text=vals.get("cover_letter_text"),
             )
             self._refresh_list()
 
@@ -1090,6 +1260,8 @@ class JobTrackerApp(ctk.CTk):
                 url=vals["url"],
                 description=vals.get("description"),
                 notes=vals.get("notes"),
+                applied_resume_text=vals.get("applied_resume_text"),
+                cover_letter_text=vals.get("cover_letter_text"),
             )
             self._refresh_list()
 

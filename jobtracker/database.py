@@ -3,6 +3,7 @@
 import sqlite3
 from pathlib import Path
 from datetime import datetime
+from urllib.parse import urlsplit
 from typing import Optional
 
 from .paths import BASE_PATH
@@ -42,6 +43,10 @@ def get_connection() -> sqlite3.Connection:
             description TEXT,
             notes TEXT,
             tailored_resume TEXT,
+            applied_resume_path TEXT,
+            cover_letter_path TEXT,
+            applied_resume_text TEXT,
+            cover_letter_text TEXT,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         )
@@ -68,6 +73,10 @@ def init_db() -> None:
             description TEXT,
             notes TEXT,
             tailored_resume TEXT,
+            applied_resume_path TEXT,
+            cover_letter_path TEXT,
+            applied_resume_text TEXT,
+            cover_letter_text TEXT,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         )
@@ -85,6 +94,34 @@ def init_db() -> None:
         conn.commit()
     except sqlite3.OperationalError:
         pass  # Column already exists
+
+    # Add applied_resume_path column for existing databases
+    try:
+        conn.execute("ALTER TABLE jobs ADD COLUMN applied_resume_path TEXT")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+
+    # Add cover_letter_path column for existing databases
+    try:
+        conn.execute("ALTER TABLE jobs ADD COLUMN cover_letter_path TEXT")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+
+    # Add applied_resume_text column for existing databases
+    try:
+        conn.execute("ALTER TABLE jobs ADD COLUMN applied_resume_text TEXT")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+
+    # Add cover_letter_text column for existing databases
+    try:
+        conn.execute("ALTER TABLE jobs ADD COLUMN cover_letter_text TEXT")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass  # Column already exists
     conn.close()
 
 
@@ -98,6 +135,10 @@ def add_job(
     url: Optional[str] = None,
     description: Optional[str] = None,
     notes: Optional[str] = None,
+    applied_resume_path: Optional[str] = None,
+    cover_letter_path: Optional[str] = None,
+    applied_resume_text: Optional[str] = None,
+    cover_letter_text: Optional[str] = None,
 ) -> int:
     """Add a new job application. Returns the new job ID."""
     now = datetime.now().isoformat()
@@ -106,10 +147,31 @@ def add_job(
     conn = get_connection()
     cursor = conn.execute(
         """
-        INSERT INTO jobs (company, position, status, applied_date, salary, location, url, description, notes, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO jobs (
+            company, position, status, applied_date, salary, location, url, description, notes,
+            applied_resume_path, cover_letter_path,
+            applied_resume_text, cover_letter_text,
+            created_at, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (company, position, status, applied_date, salary, location, url, description, notes, now, now),
+        (
+            company,
+            position,
+            status,
+            applied_date,
+            salary,
+            location,
+            url,
+            description,
+            notes,
+            applied_resume_path,
+            cover_letter_path,
+            applied_resume_text,
+            cover_letter_text,
+            now,
+            now,
+        ),
     )
     job_id = cursor.lastrowid
     conn.commit()
@@ -176,6 +238,10 @@ def update_job(
     description: Optional[str] = None,
     notes: Optional[str] = None,
     tailored_resume: Optional[str] = None,
+    applied_resume_path: Optional[str] = None,
+    cover_letter_path: Optional[str] = None,
+    applied_resume_text: Optional[str] = None,
+    cover_letter_text: Optional[str] = None,
 ) -> bool:
     """Update a job. Returns True if updated, False if not found."""
     job = get_job(job_id)
@@ -214,6 +280,22 @@ def update_job(
     if tailored_resume is not None:
         updates.append("tailored_resume = ?")
         values.append(tailored_resume)
+
+    if applied_resume_path is not None:
+        updates.append("applied_resume_path = ?")
+        values.append(applied_resume_path)
+
+    if cover_letter_path is not None:
+        updates.append("cover_letter_path = ?")
+        values.append(cover_letter_path)
+
+    if applied_resume_text is not None:
+        updates.append("applied_resume_text = ?")
+        values.append(applied_resume_text)
+
+    if cover_letter_text is not None:
+        updates.append("cover_letter_text = ?")
+        values.append(cover_letter_text)
 
     if not updates:
         return True
@@ -266,3 +348,78 @@ def get_stats() -> dict:
     ).fetchall()
     conn.close()
     return {row["status"]: row["count"] for row in rows}
+
+
+def _url_variants(url: str) -> set[str]:
+    """Return a set of normalized URL variants for duplicate detection.
+
+    Normalization is intentionally simple:
+    - ignores scheme (http/https)
+    - strips trailing slash
+    - ignores fragment
+    - includes both canonical (no query) and full (with query)
+    - includes both with and without leading 'www.'
+
+    The returned strings are *not* valid URLs; they are comparable keys.
+    """
+    url = (url or "").strip()
+    if not url:
+        return set()
+
+    # Make urlsplit treat bare domains as netloc.
+    to_parse = url if "://" in url else f"https://{url}"
+    parts = urlsplit(to_parse)
+
+    netloc = (parts.netloc or "").strip().lower()
+    path = (parts.path or "").rstrip("/")
+    query = (parts.query or "").strip()
+
+    if not netloc:
+        # Fallback: compare on a very basic cleaned string.
+        cleaned = url.strip().lower().rstrip("/")
+        return {cleaned, cleaned.split("#", 1)[0].split("?", 1)[0]}
+
+    netloc_variants = {netloc}
+    if netloc.startswith("www.") and len(netloc) > 4:
+        netloc_variants.add(netloc[4:])
+
+    variants: set[str] = set()
+    for host in netloc_variants:
+        canonical = f"{host}{path}"
+        variants.add(canonical)
+        if query:
+            variants.add(f"{canonical}?{query}")
+
+    return variants
+
+
+def job_url_exists(url: str, exclude_job_id: Optional[int] = None) -> bool:
+    """Return True if a job with the given URL already exists.
+
+    Used by the GUI to flag duplicate job URLs while typing.
+    """
+    input_variants = _url_variants(url)
+    if not input_variants:
+        return False
+
+    conn = get_connection()
+    try:
+        if exclude_job_id is not None:
+            rows = conn.execute(
+                "SELECT url FROM jobs WHERE url IS NOT NULL AND id != ?",
+                (exclude_job_id,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT url FROM jobs WHERE url IS NOT NULL"
+            ).fetchall()
+
+        for row in rows:
+            existing_url = row[0]
+            if not existing_url:
+                continue
+            if input_variants.intersection(_url_variants(str(existing_url))):
+                return True
+        return False
+    finally:
+        conn.close()

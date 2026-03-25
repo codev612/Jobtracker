@@ -54,6 +54,10 @@ def cmd_add(args: argparse.Namespace) -> None:
         url=args.url,
         description=getattr(args, "description", None),
         notes=args.notes,
+        applied_resume_path=getattr(args, "applied_resume", None),
+        cover_letter_path=getattr(args, "cover_letter", None),
+        applied_resume_text=getattr(args, "applied_resume_text", None),
+        cover_letter_text=getattr(args, "cover_letter_text", None),
     )
     print(f"[OK] Added job #{job_id}: {args.position} at {args.company}")
 
@@ -80,7 +84,21 @@ def cmd_show(args: argparse.Namespace) -> None:
 
     print(f"\nJob #{job['id']}")
     print("-" * 40)
-    for key in ["company", "position", "status", "applied_date", "salary", "location", "url", "description", "notes"]:
+    for key in [
+        "company",
+        "position",
+        "status",
+        "applied_date",
+        "salary",
+        "location",
+        "url",
+        "applied_resume_path",
+        "cover_letter_path",
+        "applied_resume_text",
+        "cover_letter_text",
+        "description",
+        "notes",
+    ]:
         value = job.get(key)
         if value:
             label = key.replace("_", " ").title()
@@ -117,6 +135,14 @@ def cmd_update(args: argparse.Namespace) -> None:
         kwargs["notes"] = args.notes
     if getattr(args, "description", None) is not None:
         kwargs["description"] = args.description
+    if getattr(args, "applied_resume", None) is not None:
+        kwargs["applied_resume_path"] = args.applied_resume
+    if getattr(args, "cover_letter", None) is not None:
+        kwargs["cover_letter_path"] = args.cover_letter
+    if getattr(args, "applied_resume_text", None) is not None:
+        kwargs["applied_resume_text"] = args.applied_resume_text
+    if getattr(args, "cover_letter_text", None) is not None:
+        kwargs["cover_letter_text"] = args.cover_letter_text
 
     if not kwargs:
         print("No updates specified. Use -h for options.")
@@ -180,6 +206,10 @@ def main() -> None:
     add_parser.add_argument("-u", "--url", help="Job posting URL")
     add_parser.add_argument("--description", help="Job description")
     add_parser.add_argument("-n", "--notes", help="Notes")
+    add_parser.add_argument("--applied-resume", dest="applied_resume", help="Path to the resume you applied with")
+    add_parser.add_argument("--cover-letter", dest="cover_letter", help="Path to the cover letter you applied with")
+    add_parser.add_argument("--applied-resume-text", dest="applied_resume_text", help="Paste the resume text you applied with")
+    add_parser.add_argument("--cover-letter-text", dest="cover_letter_text", help="Paste the cover letter text you applied with")
     add_parser.set_defaults(func=cmd_add)
 
     # list
@@ -209,6 +239,10 @@ def main() -> None:
     update_parser.add_argument("-u", "--url", help="URL")
     update_parser.add_argument("--description", help="Job description")
     update_parser.add_argument("-n", "--notes", help="Notes")
+    update_parser.add_argument("--applied-resume", dest="applied_resume", help="Path to the resume you applied with")
+    update_parser.add_argument("--cover-letter", dest="cover_letter", help="Path to the cover letter you applied with")
+    update_parser.add_argument("--applied-resume-text", dest="applied_resume_text", help="Paste the resume text you applied with")
+    update_parser.add_argument("--cover-letter-text", dest="cover_letter_text", help="Paste the cover letter text you applied with")
     update_parser.set_defaults(func=cmd_update)
 
     # delete
