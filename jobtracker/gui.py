@@ -169,6 +169,12 @@ class JobFormDialog(ctk.CTkToplevel):
             self._url_default_border_color = None
         self.url_var.trace_add("write", self._on_url_var_change)
 
+        # Validate URL length on paste (Ctrl+V / context-menu paste).
+        # We handle the paste ourselves so we can block overly-long content.
+        self.url_entry.bind("<Control-v>", self._on_url_paste)
+        self.url_entry.bind("<Control-V>", self._on_url_paste)
+        self.url_entry.bind("<<Paste>>", self._on_url_paste)
+
         # Job Description
         ctk.CTkLabel(scroll, text="Job Description").pack(anchor="w", **pad)
         self.description_text = ctk.CTkTextbox(scroll, height=100, width=400)
@@ -239,6 +245,55 @@ class JobFormDialog(ctk.CTkToplevel):
         self._url_check_after_id = self.after(250, self._check_url_duplicate)
 
 
+    def _on_url_paste(self, event=None):
+        """Handle paste into URL field and enforce max length immediately."""
+        try:
+            pasted = self.clipboard_get()
+        except Exception:
+            pasted = ""
+
+        current = self.url_var.get() or ""
+
+        # Replace current selection (if any) with pasted text.
+        sel_start = sel_end = None
+        try:
+            if self.url_entry.selection_present():
+                sel_start = int(self.url_entry.index("sel.first"))
+                sel_end = int(self.url_entry.index("sel.last"))
+        except Exception:
+            sel_start = sel_end = None
+
+        if sel_start is None or sel_end is None:
+            insert_at = None
+            try:
+                insert_at = int(self.url_entry.index("insert"))
+            except Exception:
+                insert_at = len(current)
+            candidate = current[:insert_at] + pasted + current[insert_at:]
+        else:
+            candidate = current[:sel_start] + pasted + current[sel_end:]
+
+        if len(candidate.strip()) > database.MAX_JOB_URL_LENGTH:
+            messagebox.showerror(
+                "Validation",
+                f"Job URL is too long ({len(candidate.strip())} characters). Max is {database.MAX_JOB_URL_LENGTH}.",
+            )
+            return "break"
+
+        # Apply paste ourselves and block default handler for consistent behavior.
+        try:
+            if sel_start is not None and sel_end is not None:
+                self.url_entry.delete(sel_start, sel_end)
+        except Exception:
+            pass
+        try:
+            self.url_entry.insert("insert", pasted)
+        except Exception:
+            # Fallback: set directly if insert fails
+            self.url_var.set(candidate)
+        return "break"
+
+
     def _set_url_duplicate_flag(self, is_duplicate: bool) -> None:
         self._url_is_duplicate = is_duplicate
         if not hasattr(self, "url_entry"):
@@ -294,9 +349,23 @@ class JobFormDialog(ctk.CTkToplevel):
         if not vals["company"] or not vals["position"]:
             messagebox.showerror("Validation", "Company and Position are required.")
             return
+
+        url = vals.get("url")
+        if url and len(url) > database.MAX_JOB_URL_LENGTH:
+            messagebox.showerror(
+                "Validation",
+                f"Job URL is too long ({len(url)} characters). Max is {database.MAX_JOB_URL_LENGTH}.",
+            )
+            return
+
         self.result = vals
         if self.on_save:
-            self.on_save(vals)
+            try:
+                self.on_save(vals)
+            except ValueError as e:
+                messagebox.showerror("Validation", str(e))
+                self.result = None
+                return
         self.grab_release()
         self.destroy()
 

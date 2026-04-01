@@ -44,21 +44,25 @@ def cmd_add(args: argparse.Namespace) -> None:
         print(f"Invalid status. Must be one of: {', '.join(database.STATUSES)}")
         return
 
-    job_id = database.add_job(
-        company=args.company,
-        position=args.position,
-        status=args.status or "applied",
-        applied_date=args.date,
-        salary=args.salary,
-        location=args.location,
-        url=args.url,
-        description=getattr(args, "description", None),
-        notes=args.notes,
-        applied_resume_path=getattr(args, "applied_resume", None),
-        cover_letter_path=getattr(args, "cover_letter", None),
-        applied_resume_text=getattr(args, "applied_resume_text", None),
-        cover_letter_text=getattr(args, "cover_letter_text", None),
-    )
+    try:
+        job_id = database.add_job(
+            company=args.company,
+            position=args.position,
+            status=args.status or "applied",
+            applied_date=args.date,
+            salary=args.salary,
+            location=args.location,
+            url=args.url,
+            description=getattr(args, "description", None),
+            notes=args.notes,
+            applied_resume_path=getattr(args, "applied_resume", None),
+            cover_letter_path=getattr(args, "cover_letter", None),
+            applied_resume_text=getattr(args, "applied_resume_text", None),
+            cover_letter_text=getattr(args, "cover_letter_text", None),
+        )
+    except ValueError as e:
+        print(f"Validation error: {e}")
+        return
     print(f"[OK] Added job #{job_id}: {args.position} at {args.company}")
 
 
@@ -148,7 +152,11 @@ def cmd_update(args: argparse.Namespace) -> None:
         print("No updates specified. Use -h for options.")
         return
 
-    database.update_job(args.id, **kwargs)
+    try:
+        database.update_job(args.id, **kwargs)
+    except ValueError as e:
+        print(f"Validation error: {e}")
+        return
     print(f"[OK] Updated job #{args.id}")
 
 

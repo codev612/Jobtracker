@@ -3,7 +3,7 @@
 import sqlite3
 from pathlib import Path
 from datetime import datetime
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, parse_qsl, urlencode
 from typing import Optional
 
 from .paths import BASE_PATH
@@ -11,6 +11,28 @@ from .profile_manager import get_profile_database_path
 
 # Default status options for job applications
 STATUSES = ["wishlist", "applying", "applied", "interviewing", "offer", "rejected", "accepted"]
+
+# Practical max URL length to prevent accidental pastes (e.g. full HTML).
+# (2048 is a common compatibility limit in tooling and browsers.)
+MAX_JOB_URL_LENGTH = 2048
+
+
+def _normalize_and_validate_job_url(url: Optional[str]) -> Optional[str]:
+    """Normalize a job URL value and validate constraints.
+
+    Returns a stripped string, or None when empty.
+    Raises ValueError when invalid.
+    """
+    if url is None:
+        return None
+    normalized = str(url).strip()
+    if not normalized:
+        return None
+    if len(normalized) > MAX_JOB_URL_LENGTH:
+        raise ValueError(
+            f"Job URL is too long ({len(normalized)} characters). Max is {MAX_JOB_URL_LENGTH}."
+        )
+    return normalized
 
 
 def get_database_path() -> Path:
@@ -144,6 +166,8 @@ def add_job(
     now = datetime.now().isoformat()
     applied_date = applied_date or datetime.now().strftime("%Y-%m-%d")
 
+    url = _normalize_and_validate_job_url(url)
+
     conn = get_connection()
     cursor = conn.execute(
         """
@@ -248,6 +272,11 @@ def update_job(
     if not job:
         return False
 
+    url_provided = url is not None
+    normalized_url = None
+    if url_provided:
+        normalized_url = _normalize_and_validate_job_url(url)
+
     updates = []
     values = []
     if company is not None:
@@ -268,9 +297,9 @@ def update_job(
     if location is not None:
         updates.append("location = ?")
         values.append(location)
-    if url is not None:
+    if url_provided:
         updates.append("url = ?")
-        values.append(url)
+        values.append(normalized_url)
     if description is not None:
         updates.append("description = ?")
         values.append(description)
@@ -353,11 +382,12 @@ def get_stats() -> dict:
 def _url_variants(url: str) -> set[str]:
     """Return a set of normalized URL variants for duplicate detection.
 
-    Normalization is intentionally simple:
+    Normalization is intentionally conservative:
     - ignores scheme (http/https)
     - strips trailing slash
     - ignores fragment
-    - includes both canonical (no query) and full (with query)
+    - keeps query params *unless* they are purely tracking params
+    - query params are sorted for stable comparison
     - includes both with and without leading 'www.'
 
     The returned strings are *not* valid URLs; they are comparable keys.
@@ -365,6 +395,13 @@ def _url_variants(url: str) -> set[str]:
     url = (url or "").strip()
     if not url:
         return set()
+
+    def _is_tracking_param(key: str) -> bool:
+        k = (key or "").strip().lower()
+        return (
+            k.startswith("utm_")
+            or k in {"gclid", "fbclid", "msclkid"}
+        )
 
     # Make urlsplit treat bare domains as netloc.
     to_parse = url if "://" in url else f"https://{url}"
@@ -385,10 +422,22 @@ def _url_variants(url: str) -> set[str]:
 
     variants: set[str] = set()
     for host in netloc_variants:
-        canonical = f"{host}{path}"
-        variants.add(canonical)
-        if query:
-            variants.add(f"{canonical}?{query}")
+        base = f"{host}{path}"
+
+        if not query:
+            variants.add(base)
+            continue
+
+        # Keep only non-tracking params; if nothing remains, treat as no-query.
+        pairs = parse_qsl(query, keep_blank_values=True)
+        meaningful_pairs = [(k, v) for (k, v) in pairs if not _is_tracking_param(k)]
+        if not meaningful_pairs:
+            variants.add(base)
+            continue
+
+        # Sort for stable comparison (order differences shouldn't matter).
+        normalized_query = urlencode(sorted(meaningful_pairs), doseq=True)
+        variants.add(f"{base}?{normalized_query}")
 
     return variants
 
