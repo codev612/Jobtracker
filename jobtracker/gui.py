@@ -23,7 +23,7 @@ def _export_success_dialog(parent, path: str) -> None:
     dlg.transient(parent)
     dlg.grab_set()
 
-    ctk.CTkLabel(dlg, text="Resume saved to:", font=("", 12, "bold")).pack(anchor="w", padx=20, pady=(20, 6))
+    ctk.CTkLabel(dlg, text="File saved to:", font=("", 12, "bold")).pack(anchor="w", padx=20, pady=(20, 6))
     path_lbl = ctk.CTkLabel(dlg, text=path, anchor="w", justify="left", wraplength=380)
     path_lbl.pack(anchor="w", padx=20, pady=(0, 16))
 
@@ -832,7 +832,8 @@ class JobTrackerApp(ctk.CTk):
         self.filter_date_to.bind("<Button-1>", lambda e: _show_date_picker(self, self.filter_date_to, self.filter_date_to, self._on_filter))
         self._cal_btn_to = ctk.CTkButton(dt_frame, text="📅", width=36, command=lambda: _show_date_picker(self, self.filter_date_to, self._cal_btn_to, self._on_filter))
         self._cal_btn_to.pack(side="left", padx=(5, 0))
-        ctk.CTkButton(filter_frame, text="Clear", command=self._clear_filters, width=60, fg_color="gray").pack(side="left", padx=(10, 0))
+        ctk.CTkButton(filter_frame, text="Clear", command=self._clear_filters, width=60, fg_color="gray").pack(side="left", padx=(10, 10))
+        ctk.CTkButton(filter_frame, text="Export Excel", command=self._export_filtered_jobs_to_excel, width=110).pack(side="left")
 
         # Table frame - use tkinter Treeview for grid
         table_frame = ctk.CTkFrame(job_tab, fg_color=_tab_bg)
@@ -1247,6 +1248,102 @@ class JobTrackerApp(ctk.CTk):
             )
         self._update_stats(len(jobs))
         self._on_selection_change()
+
+    def _export_filtered_jobs_to_excel(self) -> None:
+        """Export the currently filtered (and sorted) jobs to an Excel .xlsx file."""
+        try:
+            from openpyxl import Workbook
+            from openpyxl.styles import Font
+            from openpyxl.utils import get_column_letter
+        except Exception:
+            messagebox.showerror(
+                "Export",
+                "Excel export requires 'openpyxl'.\n\nInstall it with: pip install openpyxl",
+            )
+            return
+
+        filters = self._get_filters()
+        jobs = database.get_all_jobs(**filters)
+        if self._sort_column:
+            key_col = self._sort_column
+
+            def sort_key(j):
+                v = j.get(key_col) if key_col != "status" else (j.get("status") or "applied")
+                if key_col == "id":
+                    return (0, v) if v is not None else (1, 0)
+                if v is None or v == "":
+                    return (1, "")
+                return (0, str(v).lower() if isinstance(v, str) else v)
+
+            jobs = sorted(jobs, key=sort_key, reverse=self._sort_reverse)
+
+        if not jobs:
+            messagebox.showinfo("Export", "No jobs to export for the current filters.")
+            return
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        default_name = f"jobs_export_{timestamp}.xlsx"
+        path = filedialog.asksaveasfilename(
+            title="Export Jobs",
+            defaultextension=".xlsx",
+            filetypes=[("Excel Workbook", "*.xlsx"), ("All", "*.*")],
+            initialfile=default_name,
+        )
+        if not path:
+            return
+
+        # Stable, user-friendly column order.
+        columns = [
+            "id",
+            "company",
+            "position",
+            "status",
+            "applied_date",
+            "location",
+            "salary",
+            "url",
+            "description",
+            "notes",
+            "applied_resume_path",
+            "cover_letter_path",
+            "applied_resume_text",
+            "cover_letter_text",
+            "created_at",
+            "updated_at",
+        ]
+
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Jobs"
+
+        header_font = Font(bold=True)
+        ws.append([c.replace("_", " ").title() for c in columns])
+        for cell in ws[1]:
+            cell.font = header_font
+
+        for job in jobs:
+            ws.append([job.get(c, "") if job.get(c, "") is not None else "" for c in columns])
+
+        ws.freeze_panes = "A2"
+        ws.auto_filter.ref = ws.dimensions
+
+        # Basic column width sizing.
+        for idx, col_name in enumerate(columns, start=1):
+            max_len = len(col_name)
+            for row in ws.iter_rows(min_row=2, min_col=idx, max_col=idx, values_only=True):
+                val = row[0]
+                if val is None:
+                    continue
+                max_len = max(max_len, len(str(val)))
+            ws.column_dimensions[get_column_letter(idx)].width = min(max(10, max_len + 2), 60)
+
+        try:
+            wb.save(path)
+        except Exception as e:
+            messagebox.showerror("Export Failed", str(e) or "Could not save file.")
+            return
+
+        _export_success_dialog(self, path)
 
     def _update_stats(self, filtered_count: int = 0):
         stats = database.get_stats()
