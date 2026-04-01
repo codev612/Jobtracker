@@ -17,6 +17,22 @@ STATUSES = ["wishlist", "applying", "applied", "interviewing", "offer", "rejecte
 MAX_JOB_URL_LENGTH = 2048
 
 
+def _normalize_and_validate_salary(salary: Optional[str]) -> Optional[str]:
+    """Normalize salary value and validate constraints.
+
+    Returns a stripped digits-only string, or None when empty.
+    Raises ValueError when invalid.
+    """
+    if salary is None:
+        return None
+    normalized = str(salary).strip()
+    if not normalized:
+        return None
+    if not normalized.isdigit():
+        raise ValueError("Salary must contain digits only.")
+    return normalized
+
+
 def _normalize_and_validate_job_url(url: Optional[str]) -> Optional[str]:
     """Normalize a job URL value and validate constraints.
 
@@ -166,6 +182,7 @@ def add_job(
     now = datetime.now().isoformat()
     applied_date = applied_date or datetime.now().strftime("%Y-%m-%d")
 
+    salary = _normalize_and_validate_salary(salary)
     url = _normalize_and_validate_job_url(url)
 
     conn = get_connection()
@@ -277,6 +294,11 @@ def update_job(
     if url_provided:
         normalized_url = _normalize_and_validate_job_url(url)
 
+    salary_provided = salary is not None
+    normalized_salary = None
+    if salary_provided:
+        normalized_salary = _normalize_and_validate_salary(salary)
+
     updates = []
     values = []
     if company is not None:
@@ -291,9 +313,9 @@ def update_job(
     if applied_date is not None:
         updates.append("applied_date = ?")
         values.append(applied_date)
-    if salary is not None:
+    if salary_provided:
         updates.append("salary = ?")
-        values.append(salary)
+        values.append(normalized_salary)
     if location is not None:
         updates.append("location = ?")
         values.append(location)

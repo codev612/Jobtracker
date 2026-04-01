@@ -80,6 +80,13 @@ ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
 
+# Practical max lengths to prevent accidental pastes (e.g. full HTML / whole job posts).
+# These are UI-level limits; the SQLite schema uses TEXT.
+MAX_COMPANY_LENGTH = 255
+MAX_POSITION_LENGTH = 255
+MAX_LOCATION_LENGTH = 255
+
+
 class JobFormDialog(ctk.CTkToplevel):
     """Modal dialog for adding or editing a job."""
 
@@ -123,12 +130,28 @@ class JobFormDialog(ctk.CTkToplevel):
         # Company
         ctk.CTkLabel(scroll, text="Company").pack(anchor="w", **pad)
         self.company_var = ctk.StringVar()
-        ctk.CTkEntry(scroll, textvariable=self.company_var, width=400).pack(fill="x", **pad)
+        self.company_entry = ctk.CTkEntry(scroll, textvariable=self.company_var, width=400)
+        self.company_entry.pack(fill="x", **pad)
+
+        self._bind_paste_length_validation(
+            entry=self.company_entry,
+            var=self.company_var,
+            max_len=MAX_COMPANY_LENGTH,
+            field_label="Company",
+        )
 
         # Position
         ctk.CTkLabel(scroll, text="Position").pack(anchor="w", **pad)
         self.position_var = ctk.StringVar()
-        ctk.CTkEntry(scroll, textvariable=self.position_var, width=400).pack(fill="x", **pad)
+        self.position_entry = ctk.CTkEntry(scroll, textvariable=self.position_var, width=400)
+        self.position_entry.pack(fill="x", **pad)
+
+        self._bind_paste_length_validation(
+            entry=self.position_entry,
+            var=self.position_var,
+            max_len=MAX_POSITION_LENGTH,
+            field_label="Position",
+        )
 
         # Status
         ctk.CTkLabel(scroll, text="Status").pack(anchor="w", **pad)
@@ -151,12 +174,33 @@ class JobFormDialog(ctk.CTkToplevel):
         # Location
         ctk.CTkLabel(scroll, text="Location").pack(anchor="w", **pad)
         self.location_var = ctk.StringVar()
-        ctk.CTkEntry(scroll, textvariable=self.location_var, width=400).pack(fill="x", **pad)
+        self.location_entry = ctk.CTkEntry(scroll, textvariable=self.location_var, width=400)
+        self.location_entry.pack(fill="x", **pad)
+
+        self._bind_paste_length_validation(
+            entry=self.location_entry,
+            var=self.location_var,
+            max_len=MAX_LOCATION_LENGTH,
+            field_label="Location",
+        )
 
         # Salary
         ctk.CTkLabel(scroll, text="Salary").pack(anchor="w", **pad)
         self.salary_var = ctk.StringVar()
-        ctk.CTkEntry(scroll, textvariable=self.salary_var, width=200).pack(anchor="w", **pad)
+        self.salary_entry = ctk.CTkEntry(scroll, textvariable=self.salary_var, width=200)
+        self.salary_entry.pack(anchor="w", **pad)
+
+        # Salary must be digits only (allow empty).
+        vcmd = (self.register(self._validate_digits_only), "%P")
+        try:
+            self.salary_entry.configure(validate="key", validatecommand=vcmd)
+        except Exception:
+            # Some CTk versions may not expose validate/validatecommand; save-time validation still applies.
+            pass
+
+        self.salary_entry.bind("<Control-v>", self._on_salary_paste)
+        self.salary_entry.bind("<Control-V>", self._on_salary_paste)
+        self.salary_entry.bind("<<Paste>>", self._on_salary_paste)
 
         # URL
         ctk.CTkLabel(scroll, text="Job URL").pack(anchor="w", **pad)
@@ -294,6 +338,132 @@ class JobFormDialog(ctk.CTkToplevel):
         return "break"
 
 
+    def _bind_paste_length_validation(
+        self,
+        *,
+        entry: ctk.CTkEntry,
+        var: ctk.StringVar,
+        max_len: int,
+        field_label: str,
+    ) -> None:
+        """Bind Ctrl+V / <<Paste>> to enforce a max length immediately."""
+
+        def _handler(event=None):
+            return self._on_limited_entry_paste(entry=entry, var=var, max_len=max_len, field_label=field_label)
+
+        entry.bind("<Control-v>", _handler)
+        entry.bind("<Control-V>", _handler)
+        entry.bind("<<Paste>>", _handler)
+
+
+    def _on_limited_entry_paste(
+        self,
+        *,
+        entry: ctk.CTkEntry,
+        var: ctk.StringVar,
+        max_len: int,
+        field_label: str,
+    ):
+        """Handle paste into a single-line entry and enforce max length immediately."""
+        try:
+            pasted = self.clipboard_get()
+        except Exception:
+            pasted = ""
+
+        current = var.get() or ""
+
+        sel_start = sel_end = None
+        try:
+            if entry.selection_present():
+                sel_start = int(entry.index("sel.first"))
+                sel_end = int(entry.index("sel.last"))
+        except Exception:
+            sel_start = sel_end = None
+
+        if sel_start is None or sel_end is None:
+            try:
+                insert_at = int(entry.index("insert"))
+            except Exception:
+                insert_at = len(current)
+            candidate = current[:insert_at] + pasted + current[insert_at:]
+        else:
+            candidate = current[:sel_start] + pasted + current[sel_end:]
+
+        trimmed = candidate.strip()
+        if len(trimmed) > max_len:
+            messagebox.showerror(
+                "Validation",
+                f"{field_label} is too long ({len(trimmed)} characters). Max is {max_len}.",
+            )
+            return "break"
+
+        # Apply paste ourselves and block default handler for consistent behavior.
+        try:
+            if sel_start is not None and sel_end is not None:
+                entry.delete(sel_start, sel_end)
+        except Exception:
+            pass
+        try:
+            entry.insert("insert", pasted)
+        except Exception:
+            var.set(candidate)
+        return "break"
+
+
+    def _validate_digits_only(self, proposed: str) -> bool:
+        """Tk validatecommand callback: allow empty or digits-only."""
+        if proposed is None:
+            return True
+        proposed = str(proposed)
+        if proposed == "":
+            return True
+        return proposed.isdigit()
+
+
+    def _on_salary_paste(self, event=None):
+        """Handle paste into Salary field and enforce digits-only immediately."""
+        try:
+            pasted = self.clipboard_get()
+        except Exception:
+            pasted = ""
+
+        current = self.salary_var.get() or ""
+
+        sel_start = sel_end = None
+        try:
+            if self.salary_entry.selection_present():
+                sel_start = int(self.salary_entry.index("sel.first"))
+                sel_end = int(self.salary_entry.index("sel.last"))
+        except Exception:
+            sel_start = sel_end = None
+
+        if sel_start is None or sel_end is None:
+            try:
+                insert_at = int(self.salary_entry.index("insert"))
+            except Exception:
+                insert_at = len(current)
+            candidate = current[:insert_at] + pasted + current[insert_at:]
+        else:
+            candidate = current[:sel_start] + pasted + current[sel_end:]
+
+        candidate_stripped = candidate.strip()
+        if candidate_stripped and not candidate_stripped.isdigit():
+            messagebox.showerror("Validation", "Salary must contain digits only.")
+            return "break"
+
+        # Apply paste ourselves and block default handler for consistent behavior.
+        try:
+            if sel_start is not None and sel_end is not None:
+                self.salary_entry.delete(sel_start, sel_end)
+        except Exception:
+            pass
+        try:
+            self.salary_entry.insert("insert", pasted)
+        except Exception:
+            self.salary_var.set(candidate)
+        return "break"
+
+
     def _set_url_duplicate_flag(self, is_duplicate: bool) -> None:
         self._url_is_duplicate = is_duplicate
         if not hasattr(self, "url_entry"):
@@ -348,6 +518,33 @@ class JobFormDialog(ctk.CTkToplevel):
         vals = self._get_values()
         if not vals["company"] or not vals["position"]:
             messagebox.showerror("Validation", "Company and Position are required.")
+            return
+
+        sal = vals.get("salary")
+        if sal and not sal.isdigit():
+            messagebox.showerror("Validation", "Salary must contain digits only.")
+            return
+
+        if len(vals["company"]) > MAX_COMPANY_LENGTH:
+            messagebox.showerror(
+                "Validation",
+                f"Company is too long ({len(vals['company'])} characters). Max is {MAX_COMPANY_LENGTH}.",
+            )
+            return
+
+        if len(vals["position"]) > MAX_POSITION_LENGTH:
+            messagebox.showerror(
+                "Validation",
+                f"Position is too long ({len(vals['position'])} characters). Max is {MAX_POSITION_LENGTH}.",
+            )
+            return
+
+        loc = vals.get("location")
+        if loc and len(loc) > MAX_LOCATION_LENGTH:
+            messagebox.showerror(
+                "Validation",
+                f"Location is too long ({len(loc)} characters). Max is {MAX_LOCATION_LENGTH}.",
+            )
             return
 
         url = vals.get("url")
